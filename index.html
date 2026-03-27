@@ -1331,7 +1331,7 @@
     // ─── STRATEGY ANALYSIS ───────────────────────────────────────────────────────
     async function analyzeSymbol(symbol) {
       try {
-        const klines = await fetchKlines(symbol, '5m', 150);
+        const klines = await fetchKlines(symbol, '5m', 300); // 300 candles = 25 hours
         if (!klines || klines.length < 20) return null;
 
         const closes = klines.map(k => +k[4]);
@@ -1346,51 +1346,51 @@
         const currentPrice = closes[closes.length - 1];
         const currentVWAP = vwap[vwap.length - 1];
 
-        const recentHigh = Math.max(...highs.slice(-50));
+        const recentHigh = Math.max(...highs.slice(-150)); // Search for peak in the last 12.5 hours
         
-        // Find pump start index for Flat Base & Fibonacci
         let hasFlatBase = false;
         let baseMaxVal = null;
         let hasRoomToFall = false;
         
         const peakVal = recentHigh;
         const peakIndex = highs.lastIndexOf(peakVal);
-        let boostStartIndex = peakIndex;
+        let pumpDuration = 0;
         
-        for (let i = peakIndex; i >= 0; i--) {
-          if (highs[i] < peakVal * 0.8) {
-            boostStartIndex = i;
-            break;
+        // Dynamic Base Finder: Look backwards from the peak to find a 1-hour window (12 candles)
+        // that was completely flat (< 15% fluctuation) BEFORE the pump started.
+        let baseEnd = peakIndex - 1;
+        while (baseEnd >= 12) {
+          const windowHighs = highs.slice(baseEnd - 12, baseEnd + 1);
+          const windowLows = lows.slice(baseEnd - 12, baseEnd + 1);
+          const wMax = Math.max(...windowHighs);
+          const wMin = Math.min(...windowLows);
+          const fluctuation = (wMax - wMin) / wMin;
+          
+          if (fluctuation <= 0.15) { // 15% fluctuation tolerance for a "flat base"
+            if (peakVal >= wMax * 1.25) { // The peak must be at least a 25% jump from this flat base
+              pumpDuration = peakIndex - baseEnd;
+              if (pumpDuration <= 144) { // The jump must have happened within 12 hours (144 candles)
+                hasFlatBase = true;
+                baseMaxVal = wMax;
+              }
+              break;
+            }
           }
+          baseEnd--;
         }
-        
-        // Ensure the pump was a SUDDEN boost, not a slow 15-hour volatile grind
-        const pumpDuration = peakIndex - boostStartIndex;
-        const baseSize = Math.min(36, boostStartIndex); 
-        
+
         // Tighter Fibonacci: Draw from the bottom of the base right before the pump, to the pump peak
-        const baseLowIndex = Math.max(0, boostStartIndex - baseSize);
+        const baseLowIndex = baseEnd > 0 ? baseEnd - 12 : 0;
         const recentLow = Math.min(...lows.slice(baseLowIndex, peakIndex + 1));
         const fibLevels = calcFib(recentHigh, recentLow);
-
-        if (baseSize >= 6 && pumpDuration <= 72) { // Need at least 30 min base AND pump within 6 hours
-          const baseHighs = highs.slice(baseLowIndex, boostStartIndex);
-          const baseLows = lows.slice(baseLowIndex, boostStartIndex);
-          const baseMax = Math.max(...baseHighs);
-          baseMaxVal = baseMax;
-          const baseMin = Math.min(...baseLows);
-          const fluctuation = (baseMax - baseMin) / baseMin;
-          
-          if (fluctuation <= 0.15) { // Tolerate up to 15% fluctuation for volatile crypto assets
-            hasFlatBase = true; 
-            
-            // Check if there is still "meat on the bone" to fall down to the flat base
-            // Require at least a 50% ROI (0.5x margin) drop to make the trade worth it
-            const maxDropPct = (currentPrice - baseMaxVal) / currentPrice;
-            const maxRoi = maxDropPct * BOT.leverage * 100;
-            if (maxRoi >= 50) {
-              hasRoomToFall = true;
-            }
+        
+        if (hasFlatBase) {
+          // Check if there is still "meat on the bone" to fall down to the flat base
+          // Require at least a 50% ROI (0.5x margin) drop to make the trade worth it
+          const maxDropPct = (currentPrice - baseMaxVal) / currentPrice;
+          const maxRoi = maxDropPct * BOT.leverage * 100;
+          if (maxRoi >= 50) {
+            hasRoomToFall = true;
           }
         }
 
