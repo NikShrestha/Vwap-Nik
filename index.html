@@ -1373,7 +1373,7 @@
         const recentLow = Math.min(...lows.slice(baseLowIndex, peakIndex + 1));
         const fibLevels = calcFib(recentHigh, recentLow);
 
-        if (baseSize >= 12 && pumpDuration <= 36) { // Need at least 1 hr base AND sudden pump
+        if (baseSize >= 6 && pumpDuration <= 72) { // Need at least 30 min base AND pump within 6 hours
           const baseHighs = highs.slice(baseLowIndex, boostStartIndex);
           const baseLows = lows.slice(baseLowIndex, boostStartIndex);
           const baseMax = Math.max(...baseHighs);
@@ -1381,14 +1381,14 @@
           const baseMin = Math.min(...baseLows);
           const fluctuation = (baseMax - baseMin) / baseMin;
           
-          if (fluctuation < 0.08) { // Base must have < 8% fluctuation
+          if (fluctuation <= 0.15) { // Tolerate up to 15% fluctuation for volatile crypto assets
             hasFlatBase = true; 
             
             // Check if there is still "meat on the bone" to fall down to the flat base
-            // Require at least a 100% ROI (1x margin) drop to make the trade worth it
+            // Require at least a 50% ROI (0.5x margin) drop to make the trade worth it
             const maxDropPct = (currentPrice - baseMaxVal) / currentPrice;
             const maxRoi = maxDropPct * BOT.leverage * 100;
-            if (maxRoi >= 100) {
+            if (maxRoi >= 50) {
               hasRoomToFall = true;
             }
           }
@@ -1819,7 +1819,7 @@
     <div class="ind-box">
       <div class="ind-name">Flat Base</div>
       <div class="ind-val ${a.hasFlatBase ? 'green' : 'dim'}">${a.hasFlatBase ? 'YES ✓' : 'NO'}</div>
-      <div class="ind-sub">Was straight before pump</div>
+      <div class="ind-sub">Up to 15% fluctuation</div>
     </div>
   `;
 
