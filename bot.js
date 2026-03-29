@@ -2,7 +2,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args)); // If using node < 18, but Node 18 native fetch is better. We'll use global fetch.
+const fetch = global.fetch || ((...args) => import('node-fetch').then(({default: fetch}) => fetch(...args))); // If using node < 18, but Node 18 native fetch is better. We'll use global fetch.
 
 const app = express();
 app.use(express.json());
