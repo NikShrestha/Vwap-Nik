@@ -1157,581 +1157,53 @@
       </div>
     </div>
 
+    <!-- FULL WIDTH: Admin Control Panel -->
+    <div class="panel full-width">
+      <div class="panel-head">
+        <div class="panel-title">🛠️ Admin Control Panel</div>
+      </div>
+      <div class="panel-body" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <button onclick="restoreBackupData()" style="background:var(--green-dim); color:var(--green); border:1px solid rgba(0, 232, 150, 0.3); padding:8px 16px; border-radius:4px; cursor:pointer; font-weight:700; font-size:10px; transition:all 0.2s;">RESTORE LOST DATA</button>
+        <button onclick="promptSetBalance()" style="background:var(--blue-dim); color:var(--blue); border:1px solid rgba(77, 159, 255, 0.3); padding:8px 16px; border-radius:4px; cursor:pointer; font-weight:700; font-size:10px; transition:all 0.2s;">SET BALANCE</button>
+        <button onclick="promptManualTrade()" style="background:var(--amber-dim); color:var(--amber); border:1px solid rgba(255, 179, 0, 0.3); padding:8px 16px; border-radius:4px; cursor:pointer; font-weight:700; font-size:10px; transition:all 0.2s;">PLACE MANUAL TRADE</button>
+        <button onclick="closeAllPositions()" style="background:var(--red-dim); color:var(--red); border:1px solid rgba(255, 59, 92, 0.3); padding:8px 16px; border-radius:4px; cursor:pointer; font-weight:700; font-size:10px; transition:all 0.2s;">CLOSE ALL POSITIONS</button>
+      </div>
+    </div>
+
   </div>
 
-  <script>
-    // ─── STATE ───────────────────────────────────────────────────────────────────
-    const BOT = {
-      balance: 100,
-      startBalance: 100,
-      targetBalance: 200,
-      running: false,
-      trades: [],       // closed
-      activeTrades: [], // open
-      gainers: [],
-      selectedCoin: null,
-      scanInterval: null,
-      priceInterval: null,
-      nextScanIn: 0,
-      scanTimer: null,
-      lastScanTime: null,
-      maxPositions: 2,
-      riskPct: 0.02, // Risk 2% of current balance per trade
-      tpMultiplier: 3, // 3x margin profit
-      maxDrawdownPct: 0.30, // Hard Stop Loss: Max 30% of Total Balance loss per trade
-      minGain: 30, // Must hit 30% WHILE bot is running to qualify
-      showGain: 10,
-      leverage: 20,
-      qualifiedCoins: [], // stored as array for localstorage compatibility
-      trackingData: {}, // volatile cache of why we aren't trading
-      resets: 0,
-      highestBalance: 100,
-      maxDrawdownAmt: 0
+  
+<script src="/client.js"></script>
+</body>
+</html<script>
+    let BOT = {
+      balance: 100, startBalance: 100, targetBalance: 200, running: false,
+      trades: [], activeTrades: [], gainers: [], selectedCoin: null,
+      maxPositions: 2, riskPct: 0.02, tpMultiplier: 3, maxDrawdownPct: 0.30,
+      minGain: 30, showGain: 10, leverage: 20, qualifiedCoins: [],
+      trackingData: {}, resets: 0, highestBalance: 100, maxDrawdownAmt: 0,
+      logs: []
     };
 
-    // ─── PERSISTENT STORAGE ──────────────────────────────────────────────────────
-    function saveState() {
-      const state = {
-        balance: BOT.balance,
-        startBalance: BOT.startBalance,
-        trades: BOT.trades,
-        activeTrades: BOT.activeTrades,
-        qualifiedCoins: BOT.qualifiedCoins,
-        resets: BOT.resets,
-        highestBalance: BOT.highestBalance,
-        maxDrawdownAmt: BOT.maxDrawdownAmt
-      };
-      localStorage.setItem('vwapBotState', JSON.stringify(state));
-    }
-
-    function loadState() {
-      const saved = localStorage.getItem('vwapBotState');
-      if (saved) {
-        try {
-          const p = JSON.parse(saved);
-          if (p.balance !== undefined) BOT.balance = p.balance;
-          if (p.startBalance !== undefined) BOT.startBalance = p.startBalance;
-          if (p.trades) {
-            BOT.trades = p.trades.map(t => ({
-              ...t,
-              openTime: new Date(t.openTime),
-              closeTime: new Date(t.closeTime)
-            }));
-          }
-          if (p.activeTrades) {
-            BOT.activeTrades = p.activeTrades.map(t => ({
-              ...t,
-              openTime: new Date(t.openTime)
-            }));
-          }
-          if (p.qualifiedCoins) BOT.qualifiedCoins = p.qualifiedCoins;
-          if (p.resets !== undefined) BOT.resets = p.resets;
-          if (p.highestBalance !== undefined) BOT.highestBalance = p.highestBalance;
-          if (p.maxDrawdownAmt !== undefined) BOT.maxDrawdownAmt = p.maxDrawdownAmt;
-        } catch (e) { console.error('Error loading bot state', e); }
-      }
-    }
-
-    function resetState() {
-      if (confirm('Are you sure you want to completely reset your balance, trade history, and all data?')) {
-        localStorage.removeItem('vwapBotState');
-        location.reload();
-      }
-    }
-
-    // ─── BINANCE API ──────────────────────────────────────────────────────────────
-    const BINANCE = 'https://fapi.binance.com/fapi/v1';
-
-    let validSymbols = new Set();
-    async function fetchValidSymbols() {
-      try {
-        const r = await fetch(`${BINANCE}/exchangeInfo`);
-        const data = await r.json();
-        const valid = data.symbols
-          .filter(s => s.status === 'TRADING' && s.contractType === 'PERPETUAL' && s.quoteAsset === 'USDT')
-          .map(s => s.symbol);
-        validSymbols = new Set(valid);
-      } catch (e) {
-        console.error("Error fetching exchange info", e);
-      }
-    }
-
-    async function fetchTicker() {
-      if (validSymbols.size === 0) await fetchValidSymbols();
-      const r = await fetch(`${BINANCE}/ticker/24hr`);
-      const tickers = await r.json();
-      return tickers.filter(t => validSymbols.has(t.symbol));
-    }
-    async function fetchKlines(symbol, interval = '5m', limit = 100) {
-      const r = await fetch(`${BINANCE}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
-      return r.json();
-    }
-    async function fetchPrice(symbol) {
-      const r = await fetch(`${BINANCE}/ticker/price?symbol=${symbol}`);
-      return r.json();
-    }
-
-    // ─── INDICATORS ──────────────────────────────────────────────────────────────
-    function calcVWAP(klines) {
-      let tpv = 0, vol = 0;
-      return klines.map(k => {
-        const h = +k[2], l = +k[3], c = +k[4], v = +k[5];
-        const tp = (h + l + c) / 3;
-        tpv += tp * v;
-        vol += v;
-        return tpv / vol;
-      });
-    }
-
-    function calcRSI(closes, period = 14) {
-      if (closes.length < period + 1) return null;
-      let gains = 0, losses = 0;
-      for (let i = 1; i <= period; i++) {
-        const diff = closes[i] - closes[i - 1];
-        if (diff >= 0) gains += diff; else losses -= diff;
-      }
-      let avgGain = gains / period;
-      let avgLoss = losses / period;
-      const rsiArr = [];
-      for (let i = period; i < closes.length; i++) {
-        if (i > period) {
-          const diff = closes[i] - closes[i - 1];
-          avgGain = (avgGain * (period - 1) + Math.max(diff, 0)) / period;
-          avgLoss = (avgLoss * (period - 1) + Math.max(-diff, 0)) / period;
-        }
-        const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-        rsiArr.push(100 - 100 / (1 + rs));
-      }
-      return rsiArr;
-    }
-
-    function calcFib(high, low) {
-      const d = high - low;
-      return [
-        { level: '0.0 (High)', pct: 0, price: high },
-        { level: '0.236', pct: 0.236, price: high - d * 0.236 },
-        { level: '0.382', pct: 0.382, price: high - d * 0.382 },
-        { level: '0.500', pct: 0.500, price: high - d * 0.500 },
-        { level: '0.618 ★', pct: 0.618, price: high - d * 0.618 },
-        { level: '0.786', pct: 0.786, price: high - d * 0.786 },
-        { level: '1.0 (Low)', pct: 1, price: low },
-      ];
-    }
-
-    function checkVWAPCrossunder(klines, vwap) {
-      const n = klines.length;
-      if (n < 3) return false;
-      const prevClose = +klines[n - 2][4];
-      const currClose = +klines[n - 1][4];
-      const prevVWAP = vwap[n - 2];
-      const currVWAP = vwap[n - 1];
-      return prevClose > prevVWAP && currClose < currVWAP;
-    }
-
-    // ─── STRATEGY ANALYSIS ───────────────────────────────────────────────────────
-    async function analyzeSymbol(symbol) {
-      try {
-        const klines = await fetchKlines(symbol, '5m', 300); // 300 candles = 25 hours
-        if (!klines || klines.length < 20) return null;
-
-        const closes = klines.map(k => +k[4]);
-        const highs = klines.map(k => +k[2]);
-        const lows = klines.map(k => +k[3]);
-        const vols = klines.map(k => +k[5]);
-
-        const vwap = calcVWAP(klines);
-        const rsiArr = calcRSI(closes);
-        const rsi = rsiArr ? rsiArr[rsiArr.length - 1] : null;
-
-        const currentPrice = closes[closes.length - 1];
-        const currentVWAP = vwap[vwap.length - 1];
-
-        const recentHigh = Math.max(...highs.slice(-150)); // Search for peak in the last 12.5 hours
-        
-        let hasFlatBase = false;
-        let baseMaxVal = null;
-        let hasRoomToFall = false;
-        
-        const peakVal = recentHigh;
-        const peakIndex = highs.lastIndexOf(peakVal);
-        let pumpDuration = 0;
-        
-        // Dynamic Base Finder: Look backwards from the peak to find a 1-hour window (12 candles)
-        // that was completely flat (< 15% fluctuation) BEFORE the pump started.
-        let baseEnd = peakIndex - 1;
-        while (baseEnd >= 12) {
-          const windowHighs = highs.slice(baseEnd - 12, baseEnd + 1);
-          const windowLows = lows.slice(baseEnd - 12, baseEnd + 1);
-          const wMax = Math.max(...windowHighs);
-          const wMin = Math.min(...windowLows);
-          const fluctuation = (wMax - wMin) / wMin;
-          
-          if (fluctuation <= 0.15) { // 15% fluctuation tolerance for a "flat base"
-            if (peakVal >= wMax * 1.25) { // The peak must be at least a 25% jump from this flat base
-              pumpDuration = peakIndex - baseEnd;
-              if (pumpDuration <= 144) { // The jump must have happened within 12 hours (144 candles)
-                hasFlatBase = true;
-                baseMaxVal = wMax;
-              }
-              break;
-            }
-          }
-          baseEnd--;
-        }
-
-        // Tighter Fibonacci: Draw from the bottom of the base right before the pump, to the pump peak
-        const baseLowIndex = baseEnd > 0 ? baseEnd - 12 : 0;
-        const recentLow = Math.min(...lows.slice(baseLowIndex, peakIndex + 1));
-        const fibLevels = calcFib(recentHigh, recentLow);
-        
-        if (hasFlatBase) {
-          // Check if there is still "meat on the bone" to fall down to the flat base
-          // Require at least a 50% ROI (0.5x margin) drop to make the trade worth it
-          const maxDropPct = (currentPrice - baseMaxVal) / currentPrice;
-          const maxRoi = maxDropPct * BOT.leverage * 100;
-          if (maxRoi >= 50) {
-            hasRoomToFall = true;
-          }
-        }
-
-        const vwapCrossunder = checkVWAPCrossunder(klines, vwap);
-
-        // Full signal: VWAP crossunder + Flat Base + Still has room to fall
-        const fullSignal = vwapCrossunder && hasFlatBase && hasRoomToFall;
-        const partialSignal = vwapCrossunder;
-
-        return {
-          symbol, currentPrice, currentVWAP,
-          rsi, vwapCrossunder,
-          hasFlatBase, hasRoomToFall, baseMaxVal,
-          fullSignal, partialSignal,
-          fibLevels, klines, vwap,
-          recentHigh, recentLow,
-        };
-      } catch (e) {
-        return null;
-      }
-    }
-
-    // ─── TRADE MANAGEMENT ────────────────────────────────────────────────────────
-    function openTrade(analysis) {
-      const { symbol, currentPrice, currentVWAP, rsi, fibLevels, fullSignal, baseMaxVal } = analysis;
-      const margin = +(BOT.balance * BOT.riskPct).toFixed(4);
-      const notional = margin * BOT.leverage;
-      
-      const idealTpPricePct = BOT.tpMultiplier / BOT.leverage;
-      const idealTpPrice = +(currentPrice * (1 - idealTpPricePct)).toFixed(8);
-      
-      // Dynamic Take Profit: Don't expect it to fall below the flat base it pumped from
-      // We cap the TP at the baseMaxVal. (Since it's a short, Math.max chooses the higher price / smaller drop)
-      const tpPrice = baseMaxVal ? +(Math.max(idealTpPrice, baseMaxVal)).toFixed(8) : idealTpPrice;
-      
-      // Hard stop loss based on max balance drawdown
-      const allowedLoss = BOT.balance * BOT.maxDrawdownPct;
-      const slPricePct = allowedLoss / notional;
-      const slPrice = +(currentPrice * (1 + slPricePct)).toFixed(8);
-      
-      // Recalculate actual TP profit based on dynamic TP
-      const tpProfit = +(((currentPrice - tpPrice) / currentPrice) * notional).toFixed(4);
-      const slLoss = -allowedLoss;
-
-      const trade = {
-        id: Date.now(),
-        symbol, entryPrice: currentPrice, vwapAtEntry: currentVWAP,
-        rsiAtEntry: rsi, margin, notional, tpPrice, slPrice,
-        tpProfit, slLoss,
-        side: 'SHORT', leverage: BOT.leverage,
-        openTime: new Date(),
-        signalType: fullSignal ? 'FULL SIGNAL' : 'VWAP',
-        fibLevels,
-        unrealizedPnl: 0,
-        entryConditions: {
-          hasFlatBase: analysis.hasFlatBase,
-          hasRoomToFall: analysis.hasRoomToFall
-        }
-      };
-
-      BOT.activeTrades.push(trade);
-      BOT.balance = +(BOT.balance - margin).toFixed(4); // margin locked
-
-      addLog(`🟢 OPENED SHORT ${symbol} @ $${fmt(currentPrice)} | Margin $${fmt(margin)} | TP $${fmt(tpPrice)} | SL $${fmt(slPrice)}`, 'green');
-      showToast(symbol, `SHORT opened @ $${fmt(currentPrice)}`, `TP: $${fmt(tpPrice)} | SL: $${fmt(slPrice)}`, 'green');
-      sendTelegramMessage(`🟢 <b>OPENED SHORT ${symbol}</b>\n<b>Entry:</b> $${fmt(currentPrice)}\n<b>Margin:</b> $${fmt(margin)}\n<b>TP:</b> $${fmt(tpPrice)}\n<b>SL:</b> $${fmt(slPrice)}`);
-      
-      // Send report after opening a trade
-      sendPeriodicReport();
-      
-      updateUI();
-      saveState();
-    }
-
-    async function checkActiveTrades() {
-      for (let i = BOT.activeTrades.length - 1; i >= 0; i--) {
-        const t = BOT.activeTrades[i];
-        try {
-          const data = await fetchPrice(t.symbol);
-          const price = +data.price;
-          // Unrealized PnL for short: (entry - current) / entry * notional
-          t.currentPrice = price;
-          const rawPnl = (t.entryPrice - price) / t.entryPrice * t.notional;
-          t.unrealizedPnl = +rawPnl.toFixed(4);
-
-          let closed = false;
-          let pnl = 0;
-          let result = '';
-
-          if (price <= t.tpPrice) {
-            pnl = t.tpProfit;
-            result = 'WIN';
-            closed = true;
-            addLog(`✅ TP HIT ${t.symbol} @ $${fmt(price)} | +$${fmt(pnl)}`, 'green');
-            showToast(t.symbol, '🎯 Take Profit Hit!', `+$${fmt(pnl)} profit (${fmt(pnl / t.margin * 100)}% ROI)`, 'green');
-            sendTelegramMessage(`✅ <b>TP HIT ${t.symbol}</b>\n<b>Exit:</b> $${fmt(price)}\n<b>Profit:</b> +$${fmt(pnl)}\n<b>ROI:</b> +${fmt(pnl / t.margin * 100)}%`);
-          } else if (price >= t.slPrice) {
-            pnl = t.slLoss;
-            result = 'LOSS';
-            closed = true;
-            addLog(`❌ SL HIT ${t.symbol} @ $${fmt(price)} | -$${fmt(Math.abs(pnl))}`, 'red');
-            showToast(t.symbol, '🛑 Stop Loss Hit', `-$${fmt(Math.abs(pnl))} loss`, 'red');
-            sendTelegramMessage(`❌ <b>SL HIT ${t.symbol}</b>\n<b>Exit:</b> $${fmt(price)}\n<b>Loss:</b> -$${fmt(Math.abs(pnl))}\n<b>ROI:</b> -${fmt(Math.abs(pnl) / t.margin * 100)}%`);
-          }
-
-          if (closed) {
-            const duration = Math.round((Date.now() - t.openTime.getTime()) / 1000 / 60);
-            
-            // Post-Trade Analysis: fetch exact indicators at exit
-            let exitAnalysisText = "";
-            try {
-              const exitA = await analyzeSymbol(t.symbol);
-              if (exitA) {
-                const exitRsi = exitA.rsi ? exitA.rsi.toFixed(1) : '?';
-                const exitVwap = exitA.currentVWAP ? fmt(exitA.currentVWAP, 4) : '?';
-                const cond = t.entryConditions || {};
-                exitAnalysisText = `[ENTRY CHECKS] FlatBase: ${cond.hasFlatBase||false}   [EXIT STATUS] RSI: ${exitRsi} | VWAP: $${exitVwap}`;
-              }
-            } catch(e) {}
-
-            const closed_trade = {
-              ...t,
-              exitPrice: price,
-              closeTime: new Date(),
-              pnl, result,
-              durationMin: duration,
-              roiPct: +(pnl / t.margin * 100).toFixed(2),
-              balancePct: +(pnl / BOT.startBalance * 100).toFixed(2),
-              analysisText: exitAnalysisText
-            };
-            BOT.trades.push(closed_trade);
-            BOT.activeTrades.splice(i, 1);
-            // Return margin + pnl to balance
-            BOT.balance = +(BOT.balance + t.margin + pnl).toFixed(4);
-            if (BOT.balance < 0) BOT.balance = 0;
-            saveState(); // Save state after closing a trade and updating balance
-            checkGameOver();
-            
-            // Send report after closing a trade
-            sendPeriodicReport();
-          }
-        } catch (e) { /* skip */ }
-      }
-      updateUI();
-    }
-
-    function checkGameOver() {
-      // Auto-restart if balance drops too low to trade (Binance min notional is $5, so $2 cross margin is useless)
-      if (BOT.balance < 2 && BOT.activeTrades.length === 0) {
-        addLog(`💀 ACCOUNT BLOWN ($${fmt(BOT.balance)}). Auto-recovering...`, 'red');
-        showToast('ACCOUNT RESET', 'Auto-Restarting', 'Balance reset to $100', 'amber');
-        
-        sendTelegramMessage(`🔄 <b>ACCOUNT BLOWN & RESET</b>\nBalance dropped to $${fmt(BOT.balance)}.\nBot is automatically restarting with $100.00!`);
-        
-        BOT.balance = 100;
-        // Optional: you can choose to reset start balance, but keeping it shows lifetime PnL.
-        // Let's reset startBalance so the ROI indicator restarts fresh, but trades array stays.
-        BOT.startBalance = 100;
-        BOT.highestBalance = 100;
-        BOT.maxDrawdownAmt = 0;
-        BOT.resets = (BOT.resets || 0) + 1;
-        
-        saveState();
-        updateUI();
-      }
-    }
-
-    // ─── MAIN SCAN ───────────────────────────────────────────────────────────────
-    async function scan() {
-      if (!BOT.running) return;
-      const now = Date.now();
-      
-      // Perform heavy gainer scan only every 120s
-      if (!BOT.lastGainerScan || now - BOT.lastGainerScan >= 120000) {
-        BOT.lastGainerScan = now;
-        addLog('🔍 Full Scan: Fetching market gainers >10%...', 'dim');
-        
-        try {
-          const tickers = await fetchTicker();
-          
-          // Update live >30% tracker
-          tickers.forEach(t => {
-            if (+t.priceChangePercent >= BOT.minGain) {
-              if (!BOT.qualifiedCoins.includes(t.symbol)) {
-                BOT.qualifiedCoins.push(t.symbol);
-                saveState();
-              }
-            }
-          });
-
-          const gainers = tickers
-            .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_') &&
-              (+t.priceChangePercent >= BOT.showGain || BOT.qualifiedCoins.includes(t.symbol)) &&
-              +t.quoteVolume > 500000)
-            .sort((a, b) => {
-              const aQual = BOT.qualifiedCoins.includes(a.symbol) ? 1 : 0;
-              const bQual = BOT.qualifiedCoins.includes(b.symbol) ? 1 : 0;
-              // Prioritize coins that have met the 30% trade threshold
-              if (aQual > bQual) return -1;
-              if (bQual > aQual) return 1;
-              // Otherwise sort by current change
-              return +b.priceChangePercent - +a.priceChangePercent;
-            })
-            .slice(0, 30);
-
-          BOT.gainers = gainers;
-          addLog(`📊 Found ${gainers.length} gainers >+${BOT.showGain}% (Trading only tracked >+${BOT.minGain}%)`, gainers.length > 0 ? 'amber' : 'dim');
-
-          renderGainers();
-        } catch (e) {
-          addLog('⚠️ Gainer scan error: ' + e.message, 'red');
-        }
-      }
-
-      // Fast 15s scan for precise signals on qualified coins
-      try {
-        if (BOT.activeTrades.length < BOT.maxPositions && BOT.gainers && BOT.gainers.length > 0) {
-          const alreadyTrading = BOT.activeTrades.map(t => t.symbol);
-
-          for (const g of BOT.gainers) {
-            if (alreadyTrading.includes(g.symbol)) continue;
-            if (BOT.activeTrades.length >= BOT.maxPositions) break;
-            
-            // Only analyze if the coin reached our minGain (30%) AFTER bot started tracking it
-            if (!BOT.qualifiedCoins.includes(g.symbol)) {
-              const card = document.getElementById(`gainer-${g.symbol}`);
-              if (card) {
-                const tag = card.querySelector('.signal-tag');
-                if (tag) { tag.className = 'signal-tag none'; tag.textContent = `NO TRADE (<${BOT.minGain}%)`; }
-              }
-              continue;
-            }
-
-            const analysis = await analyzeSymbol(g.symbol);
-            if (!analysis) continue;
-
-            // Tracking Reason Logic
-            const highPct = ((+g.highPrice - +g.openPrice) / +g.openPrice) * 100;
-            let rejectReason = "Waiting...";
-            let rejectColor = "amber";
-            
-            if (!analysis.hasFlatBase) {
-              rejectReason = "Rejected: No Flat Base";
-              rejectColor = "red";
-            } else if (!analysis.vwapCrossunder) {
-              const dist = ((analysis.currentPrice - analysis.currentVWAP) / analysis.currentVWAP * 100);
-              if (dist > 0) {
-                rejectReason = `Waiting to drop to VWAP (-${dist.toFixed(2)}%)`;
-                rejectColor = "blue";
-              } else {
-                rejectReason = `Price below VWAP. Needs to bounce over it.`;
-                rejectColor = "dim";
-              }
-            } else if (!analysis.hasRoomToFall) {
-              rejectReason = `Rejected: Already near flat base ($${fmt(analysis.baseMaxVal, 4)})`;
-              rejectColor = "red";
-            } else {
-              rejectReason = "✅ VWAP CROSSED! FIRING SIGNAL!";
-              rejectColor = "green";
-            }
-            
-            BOT.trackingData[g.symbol] = {
-              reason: rejectReason,
-              color: rejectColor,
-              price: analysis.currentPrice,
-              vwap: analysis.currentVWAP,
-              flat: analysis.hasFlatBase ? "YES" : "NO",
-              high: highPct
-            };
-
-            addLog(`  ${g.symbol}: VWAP-cross=${analysis.vwapCrossunder}, Signal=${analysis.fullSignal ? 'FULL' : analysis.partialSignal ? 'PARTIAL' : 'NONE'}`, 'dim');
-
-            // Update gainer card signal tag
-            const card = document.getElementById(`gainer-${g.symbol}`);
-            if (card) {
-              const tag = card.querySelector('.signal-tag');
-              if (tag) {
-                if (analysis.fullSignal) { tag.className = 'signal-tag vwap'; tag.textContent = 'SIGNAL'; }
-                else if (analysis.partialSignal) { tag.className = 'signal-tag watching'; tag.textContent = 'WATCH'; }
-                else { tag.className = 'signal-tag none'; tag.textContent = 'NO SIGNAL'; }
-              }
-            }
-
-            if (analysis.fullSignal) {
-              openTrade(analysis);
-            }
-          }
-        }
-      } catch (e) {
-        addLog('⚠️ Scan error: ' + e.message, 'red');
-      }
-    }
-
-    // ─── BOT CONTROL ─────────────────────────────────────────────────────────────
-    function startBot() {
-      BOT.running = true;
-      document.getElementById('bot-toggle').className = 'bot-status running';
-      document.getElementById('bot-toggle-text').textContent = 'PAUSE BOT';
-      addLog('🚀 Bot started. Entering scan loop.', 'green');
-
-      scan();
-      BOT.scanInterval = setInterval(scan, 15000); // Now scans every 15s
-      // Price interval lowered to 3s for more precise stop loss triggers
-      BOT.priceInterval = setInterval(checkActiveTrades, 3000);
-      startCountdown();
-    }
-
-    function stopBot() {
-      BOT.running = false;
-      BOT.lastGainerScan = null; // Reset the full scan timer
-      clearInterval(BOT.scanInterval);
-      clearInterval(BOT.priceInterval);
-      clearInterval(BOT.scanTimer);
-      document.getElementById('bot-toggle').className = 'bot-status paused';
-      document.getElementById('bot-toggle-text').textContent = 'START BOT';
-      document.getElementById('scan-next').textContent = 'Paused';
-    }
-
-    
-
-    function toggleBot() {
-      if (BOT.running) stopBot(); else startBot();
-    }
-
-    function startCountdown() {
-      let t = 15;
-      clearInterval(BOT.scanTimer);
-      BOT.scanTimer = setInterval(() => {
-        t--;
-        if (t <= 0) t = 15;
-        document.getElementById('scan-next').textContent = `Signal Scan: ${t}s`;
-      }, 1000);
-    }
-
-    // ─── UI RENDER ────────────────────────────────────────────────────────────────
     function fmt(n, d = 2) { return (+n).toFixed(d); }
     function fmtP(n) { return (n >= 0 ? '+' : '') + fmt(n, 2); }
 
+    async function fetchState() {
+      try {
+        const r = await fetch('/api/state');
+        BOT = await r.json();
+        updateUI();
+      } catch (e) {
+        console.error("Failed to fetch bot state");
+      }
+    }
+    
+    setInterval(fetchState, 2000);
+    fetchState();
+
     function renderGainers() {
       const el = document.getElementById('gainer-list');
-      if (!BOT.gainers.length) {
+      if (!BOT.gainers || !BOT.gainers.length) {
         el.innerHTML = '<div class="empty">No gainers found above 10%. Will retry next scan.</div>';
         document.getElementById('gainer-count').textContent = '0 coins';
         return;
@@ -1748,7 +1220,7 @@
       </div>
       <div class="gainer-right">
         <div class="gainer-pct up">+${fmt(pct, 1)}%</div>
-        <span class="signal-tag none">—</span>
+        <span class="signal-tag ${BOT.qualifiedCoins.includes(g.symbol) ? 'watching' : 'none'}">${BOT.qualifiedCoins.includes(g.symbol) ? 'TRACKED' : 'NO TRADE'}</span>
       </div>
     </div>`;
       }).join('');
@@ -1764,77 +1236,78 @@
     <div class="ind-box"><div class="ind-name">VWAP</div><div class="ind-val dim">Loading...</div></div>
     <div class="ind-box"><div class="ind-name">RSI (14)</div><div class="ind-val dim">Loading...</div></div>
     <div class="ind-box"><div class="ind-name">Signal</div><div class="ind-val dim">—</div></div>
-    <div class="ind-box">
-      <div class="ind-name">Leverage</div>
-      <div class="ind-val amber">20x</div>
-      <div class="ind-sub">Cross Margin Short</div>
-    </div>
+    <div class="ind-box"><div class="ind-name">Leverage</div><div class="ind-val amber">20x</div><div class="ind-sub">Cross Margin Short</div></div>
   `;
       document.getElementById('fib-table').innerHTML = '<div class="empty" style="padding:16px;">Loading Fibonacci levels...</div>';
 
-      const a = await analyzeSymbol(symbol);
-      if (!a) {
+      try {
+        const res = await fetch('/api/action', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ action: 'analyze', payload: { symbol } })
+        });
+        const data = await res.json();
+        if (!data.success || !data.analysis) throw new Error();
+        const a = data.analysis;
+
+        document.getElementById('sel-price').textContent = `$${fmt(a.currentPrice, 6)}`;
+        const priceDiff = ((a.currentPrice - a.currentVWAP) / a.currentVWAP * 100);
+        const rsiColor = a.rsi > 70 ? 'red' : a.rsi > 50 ? 'amber' : 'green';
+        const sigText = a.fullSignal ? 'SHORT NOW' : a.partialSignal ? 'WATCH' : 'NONE';
+        const sigColor = a.fullSignal ? 'red' : a.partialSignal ? 'amber' : 'dim';
+
+        document.getElementById('indicators-grid').innerHTML = `
+      <div class="ind-box">
+        <div class="ind-name">VWAP</div>
+        <div class="ind-val ${priceDiff < 0 ? 'green' : 'red'}">$${fmt(a.currentVWAP, 6)}</div>
+        <div class="ind-sub">Price ${priceDiff < 0 ? 'below' : 'above'} VWAP ${fmt(Math.abs(priceDiff), 2)}%</div>
+      </div>
+      <div class="ind-box">
+        <div class="ind-name">RSI (14)</div>
+        <div class="ind-val ${rsiColor}">${a.rsi ? fmt(a.rsi, 1) : '—'}</div>
+        <div class="ind-sub">${a.rsi > 70 ? 'Overbought' : a.rsi > 50 ? 'Bullish zone' : 'Neutral'}</div>
+      </div>
+      <div class="ind-box">
+        <div class="ind-name">VWAP Cross</div>
+        <div class="ind-val ${a.vwapCrossunder ? 'red' : 'dim'}">${a.vwapCrossunder ? '⬇ CROSSUNDER' : 'No cross'}</div>
+        <div class="ind-sub">Last 5m candle</div>
+      </div>
+      <div class="ind-box">
+        <div class="ind-name">Signal</div>
+        <div class="ind-val ${sigColor}">${sigText}</div>
+        <div class="ind-sub">${a.fullSignal ? 'VWAP + FlatBase' : a.partialSignal ? 'VWAP only' : 'Waiting...'}</div>
+      </div>
+      <div class="ind-box">
+        <div class="ind-name">TP Price</div>
+        <div class="ind-val green">$${fmt(a.currentPrice * (1 - (BOT.tpMultiplier / BOT.leverage)), 6)}</div>
+        <div class="ind-sub">-${fmt(BOT.tpMultiplier / BOT.leverage * 100, 1)}% from entry</div>
+      </div>
+      <div class="ind-box">
+        <div class="ind-name">SL Price</div>
+        <div class="ind-val red">$${fmt(a.currentPrice * (1 + (BOT.balance * BOT.maxDrawdownPct) / (BOT.balance * BOT.riskPct * BOT.leverage)), 6)}</div>
+        <div class="ind-sub">-30% Account Balance</div>
+      </div>
+      <div class="ind-box">
+        <div class="ind-name">Flat Base</div>
+        <div class="ind-val ${a.hasFlatBase ? 'green' : 'dim'}">${a.hasFlatBase ? 'YES ✓' : 'NO'}</div>
+        <div class="ind-sub">Up to 15% fluctuation</div>
+      </div>
+    `;
+
+        const currentPrice = a.currentPrice;
+        document.getElementById('fib-table').innerHTML = a.fibLevels.map(f => {
+          const dist = ((currentPrice - f.price) / currentPrice * 100);
+          const isNear = Math.abs(dist) < 1.5;
+          const isGolden = f.pct === 0.618;
+          return `<div class="fib-row ${isNear || isGolden ? 'highlighted' : ''}">
+        <div class="fib-level">${f.level}</div>
+        <div class="fib-price">$${fmt(f.price, 6)}</div>
+        <div class="fib-dist" style="color:${dist > 0 ? 'var(--green)' : 'var(--red)'}">${fmtP(dist)}%</div>
+      </div>`;
+        }).join('');
+      } catch (e) {
         document.getElementById('sel-price').textContent = 'Error loading data';
-        return;
       }
-
-      document.getElementById('sel-price').textContent = `$${fmt(a.currentPrice, 6)}`;
-
-      const priceDiff = ((a.currentPrice - a.currentVWAP) / a.currentVWAP * 100);
-      const rsiColor = a.rsi > 70 ? 'red' : a.rsi > 50 ? 'amber' : 'green';
-      const sigText = a.fullSignal ? 'SHORT NOW' : a.partialSignal ? 'WATCH' : 'NONE';
-      const sigColor = a.fullSignal ? 'red' : a.partialSignal ? 'amber' : 'dim';
-
-      document.getElementById('indicators-grid').innerHTML = `
-    <div class="ind-box">
-      <div class="ind-name">VWAP</div>
-      <div class="ind-val ${priceDiff < 0 ? 'green' : 'red'}">$${fmt(a.currentVWAP, 6)}</div>
-      <div class="ind-sub">Price ${priceDiff < 0 ? 'below' : 'above'} VWAP ${fmt(Math.abs(priceDiff), 2)}%</div>
-    </div>
-    <div class="ind-box">
-      <div class="ind-name">RSI (14)</div>
-      <div class="ind-val ${rsiColor}">${a.rsi ? fmt(a.rsi, 1) : '—'}</div>
-      <div class="ind-sub">${a.rsi > 70 ? 'Overbought' : a.rsi > 50 ? 'Bullish zone' : 'Neutral'}</div>
-    </div>
-    <div class="ind-box">
-      <div class="ind-name">VWAP Cross</div>
-      <div class="ind-val ${a.vwapCrossunder ? 'red' : 'dim'}">${a.vwapCrossunder ? '⬇ CROSSUNDER' : 'No cross'}</div>
-      <div class="ind-sub">Last 5m candle</div>
-    </div>
-    <div class="ind-box">
-      <div class="ind-name">Signal</div>
-      <div class="ind-val ${sigColor}">${sigText}</div>
-      <div class="ind-sub">${a.fullSignal ? 'VWAP + FlatBase' : a.partialSignal ? 'VWAP only' : 'Waiting...'}</div>
-    </div>
-    <div class="ind-box">
-      <div class="ind-name">TP Price</div>
-      <div class="ind-val green">$${fmt(a.currentPrice * (1 - (BOT.tpMultiplier / BOT.leverage)), 6)}</div>
-      <div class="ind-sub">-${fmt(BOT.tpMultiplier / BOT.leverage * 100, 1)}% from entry</div>
-    </div>
-    <div class="ind-box">
-      <div class="ind-name">SL Price</div>
-      <div class="ind-val red">$${fmt(a.currentPrice * (1 + (BOT.balance * BOT.maxDrawdownPct) / (BOT.balance * BOT.riskPct * BOT.leverage)), 6)}</div>
-      <div class="ind-sub">-30% Account Balance</div>
-    </div>
-    <div class="ind-box">
-      <div class="ind-name">Flat Base</div>
-      <div class="ind-val ${a.hasFlatBase ? 'green' : 'dim'}">${a.hasFlatBase ? 'YES ✓' : 'NO'}</div>
-      <div class="ind-sub">Up to 15% fluctuation</div>
-    </div>
-  `;
-
-      // Fibonacci table
-      const currentPrice = a.currentPrice;
-      document.getElementById('fib-table').innerHTML = a.fibLevels.map(f => {
-        const dist = ((currentPrice - f.price) / currentPrice * 100);
-        const isNear = Math.abs(dist) < 1.5;
-        const isGolden = f.pct === 0.618;
-        return `<div class="fib-row ${isNear || isGolden ? 'highlighted' : ''}">
-      <div class="fib-level">${f.level}</div>
-      <div class="fib-price">$${fmt(f.price, 6)}</div>
-      <div class="fib-dist" style="color:${dist > 0 ? 'var(--green)' : 'var(--red)'}">${fmtP(dist)}%</div>
-    </div>`;
-      }).join('');
     }
 
     function updateUI() {
@@ -1863,12 +1336,9 @@
 
       // Progress bar
       let target = BOT.startBalance * 2;
-      while (BOT.balance >= target) {
-        target *= 2;
-      }
-      BOT.targetBalance = target;
+      while (BOT.balance >= target) target *= 2;
       
-      const prog = Math.max(0, Math.min(100, (BOT.balance / BOT.targetBalance) * 100));
+      const prog = Math.max(0, Math.min(100, (BOT.balance / target) * 100));
       if(document.getElementById('progress-fill')) {
         document.getElementById('progress-fill').style.width = prog + '%';
         document.getElementById('progress-fill').className = 'progress-bar-fill' + (BOT.balance < BOT.startBalance ? ' red' : '');
@@ -1878,11 +1348,11 @@
       const progLabels = document.querySelectorAll('.progress-label');
       if (progLabels.length >= 2) {
         progLabels[0].textContent = `$${fmt(BOT.startBalance, 0)}`;
-        progLabels[1].textContent = `$${fmt(BOT.targetBalance, 0)}`;
+        progLabels[1].textContent = `$${fmt(target, 0)}`;
       }
       
       if(document.getElementById('s-start-bal')) document.getElementById('s-start-bal').textContent = `$${fmt(BOT.startBalance)}`;
-      if(document.getElementById('s-start-target')) document.getElementById('s-start-target').textContent = `Target: $${fmt(BOT.targetBalance)}`;
+      if(document.getElementById('s-start-target')) document.getElementById('s-start-target').textContent = `Target: $${fmt(target)}`;
 
       if(document.getElementById('s-pnl')) {
         document.getElementById('s-pnl').textContent = `${fmtP(pnl)}`;
@@ -1914,10 +1384,6 @@
       
       const pf = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? 99.9 : 0);
       if(document.getElementById('s-profit-factor')) document.getElementById('s-profit-factor').textContent = BOT.trades.length ? fmt(pf, 2) : '—';
-      
-      if (BOT.balance > BOT.highestBalance) BOT.highestBalance = BOT.balance;
-      const currentDD = BOT.highestBalance - BOT.balance;
-      if (currentDD > BOT.maxDrawdownAmt) BOT.maxDrawdownAmt = currentDD;
       
       const maxDDPct = BOT.highestBalance > 0 ? (BOT.maxDrawdownAmt / BOT.highestBalance) * 100 : 0;
       if(document.getElementById('s-max-dd')) document.getElementById('s-max-dd').textContent = `-$${fmt(BOT.maxDrawdownAmt)}`;
@@ -1952,7 +1418,11 @@
           return `<div class="trade-card">
         <div class="trade-card-head">
           <div class="trade-sym">${t.symbol}</div>
-          <div class="trade-dir">SHORT ${t.leverage}x</div>
+          <div style="display:flex;gap:4px;align-items:center;">
+            <div class="trade-dir">SHORT ${t.leverage}x</div>
+            <button onclick="editTrade(${t.id})" style="background:var(--blue-dim);border:1px solid rgba(77,159,255,0.3);color:var(--blue);padding:2px 6px;border-radius:3px;font-size:8px;cursor:pointer;font-weight:bold;">EDIT</button>
+            <button onclick="closeTrade(${t.id})" style="background:var(--red-dim);border:1px solid rgba(255,59,92,0.3);color:var(--red);padding:2px 6px;border-radius:3px;font-size:8px;cursor:pointer;font-weight:bold;">CLOSE</button>
+          </div>
         </div>
         <div class="trade-rows">
           <div class="trade-row"><div class="trade-row-label">Entry</div><div class="trade-row-val">$${fmt(t.entryPrice, 6)}</div></div>
@@ -1991,9 +1461,8 @@
         <td style="color:var(--text-dim)">${t.durationMin}m</td>
         <td><span class="pill ${t.result === 'WIN' ? 'win' : 'loss'}">${t.result}</span></td>
         <td style="color:var(--blue);font-size:9px">${t.signalType}</td>
-        <td style="color:var(--text-dim)">${t.closeTime.toLocaleTimeString()}</td>
+        <td style="color:var(--text-dim)">${new Date(t.closeTime).toLocaleTimeString()}</td>
         <td>
-          <button onclick="showChart(${t.id})" style="background:var(--bg4);border:1px solid var(--border);color:#fff;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:9px;">VIEW</button>
           <button onclick="alert('${t.analysisText || 'No post-trade analysis saved for this trade.'}')" style="background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue);padding:2px 6px;border-radius:3px;cursor:pointer;font-size:9px;margin-left:4px;">INFO</button>
         </td>
       </tr>`;
@@ -2001,17 +1470,13 @@
       }
       document.getElementById('hist-count').textContent = `${BOT.trades.length} trades`;
       
-      // Update Live Tracker Table
       const tb = document.getElementById('tracker-body');
       if (tb && BOT.qualifiedCoins.length > 0) {
         document.getElementById('tracker-count').textContent = `${BOT.qualifiedCoins.length} tracked`;
-        
         const trackedHtml = BOT.qualifiedCoins.map(sym => {
           const data = BOT.trackingData[sym] || { reason: 'Waiting for scan...', color: 'dim', price: 0, vwap: 0, flat: '?', high: 0 };
-          
           let priceStr = data.price ? `$${fmt(data.price, 4)}` : '—';
           let vwapStr = data.vwap ? `$${fmt(data.vwap, 4)}` : '—';
-          
           return `<tr>
             <td style="font-weight:700; color:#fff">${sym}</td>
             <td style="color:var(--${data.color})">${data.reason}</td>
@@ -2020,258 +1485,110 @@
             <td style="color:var(--green)">+${fmt(data.high, 1)}%</td>
           </tr>`;
         }).join('');
-        
         tb.innerHTML = trackedHtml;
+      }
+      
+      renderGainers();
+      
+      // Update Bot Status Header
+      if (BOT.running) {
+        document.getElementById('bot-toggle').className = 'bot-status running';
+        document.getElementById('bot-toggle-text').textContent = 'PAUSE BOT';
+      } else {
+        document.getElementById('bot-toggle').className = 'bot-status paused';
+        document.getElementById('bot-toggle-text').textContent = 'START BOT';
+      }
+      
+      // Update Logs
+      const el = document.getElementById('scan-log');
+      el.innerHTML = BOT.logs.map(log => `<div class="log-entry"><div class="log-time">${log.time}</div><div class="log-msg ${log.type}">${log.msg}</div></div>`).join('');
+    }
+
+    async function sendAction(action, payload = {}) {
+      const res = await fetch('/api/action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action, payload})
+      });
+      const data = await res.json();
+      if(data.success) {
+         fetchState();
+      } else {
+         showToast("Error", "Action Failed", data.msg, "red");
       }
     }
 
-    // ─── LOG ─────────────────────────────────────────────────────────────────────
-    function addLog(msg, type = '') {
-      const el = document.getElementById('scan-log');
-      const entry = document.createElement('div');
-      entry.className = 'log-entry';
-      const now = new Date();
-      entry.innerHTML = `<div class="log-time">${now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div><div class="log-msg ${type}">${msg}</div>`;
-      if (el.firstChild && el.firstChild.classList && el.firstChild.classList.contains('empty')) el.innerHTML = '';
-      el.insertBefore(entry, el.firstChild);
-      // Keep max 60 entries
-      while (el.children.length > 60) el.removeChild(el.lastChild);
+    function toggleBot() {
+      if (BOT.running) sendAction('stop'); else sendAction('start');
+    }
+    
+    function resetState() {
+      if (confirm('Are you sure you want to completely reset your balance, trade history, and all data?')) {
+        sendAction('reset');
+      }
     }
 
-    // ─── TOAST ───────────────────────────────────────────────────────────────────
+    function restoreBackupData() {
+      if (!confirm("This will overwrite your current state with the lost data backup. Proceed?")) return;
+      const backup = {
+        "trades": [
+          { "id": 1, "symbol": "ONUSDT", "side": "SHORT", "entryPrice": 0.201560, "exitPrice": 0.170660, "margin": 2.00, "leverage": 20, "notional": 40.00, "pnl": 6.00, "roiPct": 300.00, "balancePct": 6.00, "durationMin": 18, "result": "WIN", "signalType": "FULL SIGNAL", "openTime": "2026-03-29T02:01:35.000Z", "closeTime": "2026-03-29T02:19:35.000Z", "analysisText": "[ENTRY CHECKS] FlatBase: true" },
+          { "id": 2, "symbol": "ONUSDT", "side": "SHORT", "entryPrice": 0.196040, "exitPrice": 0.166480, "margin": 2.08, "leverage": 20, "notional": 41.55, "pnl": 6.23, "roiPct": 300.00, "balancePct": 6.23, "durationMin": 223, "result": "WIN", "signalType": "FULL SIGNAL", "openTime": "2026-03-29T08:13:05.000Z", "closeTime": "2026-03-29T11:56:05.000Z", "analysisText": "[ENTRY CHECKS] FlatBase: true" },
+          { "id": 3, "symbol": "PTBUSDT", "side": "SHORT", "entryPrice": 0.001878, "exitPrice": 0.001750, "margin": 2.20, "leverage": 20, "notional": 44.05, "pnl": 2.13, "roiPct": 96.91, "balancePct": 2.13, "durationMin": 5, "result": "WIN", "signalType": "FULL SIGNAL", "openTime": "2026-03-29T17:45:14.000Z", "closeTime": "2026-03-29T17:50:14.000Z", "analysisText": "[ENTRY CHECKS] FlatBase: true" }
+        ],
+        "activeTrades": [
+          { "id": 4, "symbol": "CUSDT", "side": "SHORT", "entryPrice": 0.086870, "currentPrice": 0.080500, "margin": 2.12, "leverage": 20, "notional": 42.40, "tpPrice": 0.073840, "slPrice": 0.152023, "signalType": "FULL SIGNAL", "openTime": "2026-03-29T18:00:00.000Z", "unrealizedPnl": 3.11, "tpProfit": 6.33, "slLoss": -30 },
+          { "id": 5, "symbol": "ONTUSDT", "side": "SHORT", "entryPrice": 0.061300, "currentPrice": 0.061300, "margin": 2.24, "leverage": 20, "notional": 44.90, "tpPrice": 0.053200, "slPrice": 0.107276, "signalType": "FULL SIGNAL", "openTime": "2026-03-29T18:05:00.000Z", "unrealizedPnl": 0.00, "tpProfit": 6.72, "slLoss": -30 }
+        ],
+        "qualifiedCoins": ["SIRENUSDT", "NOMUSDT", "4USDT", "ONTUSDT", "ARCUSDT", "XNYUSDT", "BSBUSDT", "STGUSDT", "PROVEUSDT", "B3USDT", "KNCUSDT", "CUSDT", "BLUAIUSDT", "PTBUSDT", "QUSDT", "ONUSDT", "AIAUSDT", "CHZUSDT", "NIGHTUSDT", "AIOUSDT", "TRIAUSDT", "HEMIUSDT", "EDGEUSDT", "CCUSDT"]
+      };
+      sendAction('restore', backup);
+      showToast("Data Restored", "Success", "Your previous trading data has been loaded.", "green");
+    }
+
+    function promptSetBalance() {
+      const newBal = prompt("Enter new balance (e.g. 150.00):", BOT.balance);
+      if (newBal && !isNaN(parseFloat(newBal))) sendAction('set_balance', { balance: newBal });
+    }
+
+    function promptManualTrade() {
+      const sym = prompt("Enter Symbol to SHORT (e.g. BTCUSDT):");
+      if (!sym) return;
+      const entry = prompt(`Enter Entry Price for ${sym}:`);
+      if (!entry || isNaN(parseFloat(entry))) return;
+      sendAction('manual_trade', { symbol: sym, entryPrice: entry });
+    }
+
+    function editTrade(id) {
+      const t = BOT.activeTrades.find(x => x.id === id);
+      if (!t) return;
+      const newTP = prompt(`Edit Take Profit Price for ${t.symbol} (Current: ${t.tpPrice}):`, t.tpPrice);
+      const newSL = prompt(`Edit Stop Loss Price for ${t.symbol} (Current: ${t.slPrice}):`, t.slPrice);
+      if (newTP && newSL) {
+         sendAction('edit_trade', { id, tpPrice: newTP, slPrice: newSL });
+      }
+    }
+
+    function closeTrade(id) {
+      if (confirm("Market close this position?")) {
+        sendAction('close_trade', { id });
+      }
+    }
+
+    function closeAllPositions() {
+      if (confirm("Are you sure you want to Market Close all active trades?")) {
+         BOT.activeTrades.forEach(t => sendAction('close_trade', { id: t.id }));
+      }
+    }
+
     function showToast(title, subtitle, body, type = 'amber') {
       const c = document.getElementById('toast-container');
       const t = document.createElement('div');
       t.className = `toast ${type}`;
       t.innerHTML = `<div class="toast-title ${type}">${title}</div><div style="color:var(--text);margin-bottom:2px">${subtitle}</div><div style="color:var(--text-dim);font-size:10px">${body}</div>`;
       c.insertBefore(t, c.firstChild);
-      setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, 5000);
+      setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 5000);
     }
-
-    // ─── TELEGRAM ────────────────────────────────────────────────────────────────
-    let TG_TOKEN = localStorage.getItem('vwapBotTgToken') || '';
-    let TG_CHAT_ID = localStorage.getItem('vwapBotTgChatId') || '';
-
-    window.addEventListener('DOMContentLoaded', () => {
-      if(document.getElementById('tg-token')) document.getElementById('tg-token').value = TG_TOKEN;
-      if(document.getElementById('tg-chatid')) document.getElementById('tg-chatid').value = TG_CHAT_ID;
-    });
-
-    function saveTelegram() {
-      TG_TOKEN = document.getElementById('tg-token').value.trim();
-      TG_CHAT_ID = document.getElementById('tg-chatid').value.trim();
-      localStorage.setItem('vwapBotTgToken', TG_TOKEN);
-      localStorage.setItem('vwapBotTgChatId', TG_CHAT_ID);
-      showToast('Telegram Settings', 'Saved Successfully', 'Alerts will be sent if active', 'green');
-      if (TG_TOKEN && TG_CHAT_ID) {
-        sendTelegramMessage("✅ <b>VWAP Scalper Bot connected!</b>\nYou will now receive trade alerts here.");
-      }
-    }
-
-    async function sendTelegramMessage(text) {
-      if (!TG_TOKEN || !TG_CHAT_ID) return;
-      try {
-        const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`;
-        await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: TG_CHAT_ID, text: text, parse_mode: 'HTML' })
-        });
-      } catch (e) {
-        console.error("Telegram error:", e);
-      }
-    }
-
-    function sendPeriodicReport() {
-      const wins = BOT.trades.filter(t => t.result === 'WIN').length;
-      const total = BOT.trades.length;
-      const wr = total > 0 ? (wins / total * 100).toFixed(1) : 0;
-      
-      const todayStr = new Date().toLocaleDateString();
-      const tradesToday = BOT.trades.filter(t => new Date(t.closeTime).toLocaleDateString() === todayStr).length;
-      
-      const roi = ((BOT.balance - BOT.startBalance) / BOT.startBalance * 100).toFixed(2);
-      
-      const msg = `📊 <b>VWAP BOT STATUS REPORT</b> 📊\n\n` +
-                  `💰 <b>Balance:</b> $${fmt(BOT.balance)}\n` +
-                  `📈 <b>ROI:</b> ${roi >= 0 ? '+'+roi : roi}%\n` +
-                  `🏆 <b>Win Rate:</b> ${wr}% (${wins}/${total})\n` +
-                  `🔄 <b>Trades Today:</b> ${tradesToday}\n` +
-                  `⚡ <b>Active Positions:</b> ${BOT.activeTrades.length}\n` +
-                  `⚠️ <b>Account Resets:</b> ${BOT.resets || 0}`;
-      sendTelegramMessage(msg);
-    }
-      
-    async function testTelegram() {
-      const tempToken = document.getElementById('tg-token').value.trim();
-      const tempChatId = document.getElementById('tg-chatid').value.trim();
-      
-      if (!tempToken || !tempChatId) {
-        showToast('Telegram', 'Missing Info', 'Please enter your Bot Token and Chat ID first', 'red');
-        return;
-      }
-      
-      showToast('Telegram', 'Sending...', 'Attempting to send message...', 'blue');
-      
-      try {
-        const url = `https://api.telegram.org/bot${tempToken}/sendMessage`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            chat_id: tempChatId, 
-            text: "🔔 <b>Test Message!</b>\nYour Telegram alerts are working perfectly. The bot will notify you here when it opens or closes trades.", 
-            parse_mode: 'HTML' 
-          })
-        });
-        
-        const data = await res.json();
-        
-        if (data.ok) {
-          showToast('Telegram', 'Message Sent!', 'Check your Telegram app right now', 'green');
-          sendPeriodicReport(); // Also send a test report to make sure it looks good
-        } else {
-          showToast('Telegram Error', 'Failed to send', data.description || 'Check Token/Chat ID', 'red');
-          console.error('TG Error Response:', data);
-        }
-      } catch (e) {
-        showToast('Telegram Error', 'Network error', e.message, 'red');
-      }
-    }
-
-    // ─── CHART GRAPH RENDERING ───────────────────────────────────────────────────
-    function closeChart() {
-      document.getElementById('chart-modal').style.display = 'none';
-    }
-
-    async function showChart(tradeId) {
-      const trade = BOT.trades.find(t => t.id === tradeId);
-      if (!trade) return;
-
-      document.getElementById('chart-modal').style.display = 'flex';
-      document.getElementById('cm-title').textContent = `${trade.symbol} Trade Analysis`;
-      
-      const c = document.getElementById('chart');
-      const ctx = c.getContext('2d');
-      // Set resolution
-      c.width = c.parentElement.clientWidth;
-      c.height = 300;
-      ctx.clearRect(0, 0, c.width, c.height);
-      ctx.fillStyle = '#070a0e';
-      ctx.fillRect(0, 0, c.width, c.height);
-
-      ctx.fillStyle = '#8aabb8';
-      ctx.font = '12px JetBrains Mono';
-      ctx.fillText('Loading trade data...', c.width/2 - 60, c.height/2);
-
-      try {
-        // Fetch klines from slightly before open to slightly after close
-        // Buffer: 60 candles before entry (300 mins), 10 candles after close
-        const startT = trade.openTime.getTime() - (60 * 5 * 60000); 
-        const endT = trade.closeTime.getTime() + (10 * 5 * 60000);
-        const limit = Math.ceil((endT - startT) / (5 * 60000)) + 5;
-        
-        const r = await fetch(`${BINANCE}/klines?symbol=${trade.symbol}&interval=5m&startTime=${startT}&endTime=${endT}&limit=${limit}`);
-        const klines = await r.json();
-
-        if(!klines || klines.length === 0) {
-          ctx.clearRect(0, 0, c.width, c.height);
-          ctx.fillText('No historical data available.', c.width/2 - 80, c.height/2);
-          return;
-        }
-
-        ctx.clearRect(0, 0, c.width, c.height);
-
-        // Calculate limits
-        const prices = klines.flatMap(k => [parseFloat(k[2]), parseFloat(k[3])]);
-        const minP = Math.min(...prices) * 0.999;
-        const maxP = Math.max(...prices);
-        const pRange = maxP - minP;
-
-        const padX = 40;
-        const padY = 20;
-        const chartW = c.width - padX * 2;
-        const chartH = c.height - padY * 2;
-        const candleW = Math.max(2, (chartW / klines.length) * 0.8);
-        const stepX = chartW / klines.length;
-
-        const getY = (price) => padY + chartH - ((price - minP) / pRange * chartH);
-
-        for (let i=0; i<klines.length; i++) {
-          const k = klines[i];
-          const o = parseFloat(k[1]), h = parseFloat(k[2]), l = parseFloat(k[3]), cl = parseFloat(k[4]);
-          
-          const x = padX + i * stepX + stepX/2;
-          const isUp = cl >= o;
-          
-          ctx.strokeStyle = isUp ? '#00e896' : '#ff3b5c';
-          ctx.fillStyle = isUp ? '#00e896' : '#ff3b5c';
-
-          ctx.beginPath();
-          ctx.moveTo(x, getY(h));
-          ctx.lineTo(x, getY(l));
-          ctx.stroke();
-
-          const bodyTop = getY(Math.max(o, cl));
-          const bodyBot = getY(Math.min(o, cl));
-          const bodyH = Math.max(1, bodyBot - bodyTop);
-          ctx.fillRect(x - candleW/2, bodyTop, candleW, bodyH);
-        }
-
-        // Horizontal lines for Entry and Exit
-        const entryY = getY(trade.entryPrice);
-        const exitY = getY(trade.exitPrice);
-
-        // Draw Entry Line
-        ctx.strokeStyle = '#4d9fff'; ctx.setLineDash([5, 5]); ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(padX, entryY); ctx.lineTo(c.width - padX, entryY); ctx.stroke();
-        ctx.fillStyle = '#4d9fff'; ctx.fillText(`Entry $${trade.entryPrice}`, 5, entryY - 5);
-
-        // Draw Exit Line
-        ctx.strokeStyle = trade.result === 'WIN' ? '#00e896' : '#ff3b5c'; 
-        ctx.beginPath(); ctx.moveTo(padX, exitY); ctx.lineTo(c.width - padX, exitY); ctx.stroke();
-        ctx.fillStyle = trade.result === 'WIN' ? '#00e896' : '#ff3b5c';
-        ctx.fillText(`Exit $${trade.exitPrice}`, 5, exitY - 5);
-        ctx.setLineDash([]); // reset
-
-        // Draw Entry and Exit vertical points
-        const entryTime = trade.openTime.getTime();
-        const exitTime = trade.closeTime.getTime();
-        
-        let entryX = null, exitX = null;
-        for (let i=0; i<klines.length; i++) {
-          const t = parseInt(klines[i][0]);
-          if(entryX === null && t >= entryTime - 300000) entryX = padX + i * stepX + stepX/2;
-          if(exitX === null && t >= exitTime - 300000) exitX = padX + i * stepX + stepX/2;
-        }
-
-        if(entryX) {
-          ctx.strokeStyle = '#4d9fff'; // Entry blue
-          ctx.beginPath(); ctx.moveTo(entryX, 0); ctx.lineTo(entryX, c.height); ctx.stroke();
-          ctx.fillStyle = '#4d9fff'; ctx.fillText('ENTRY ' + trade.side, entryX + 5, 20);
-        }
-        
-        if(exitX) {
-          ctx.strokeStyle = trade.result === 'WIN' ? '#00e896' : '#ff3b5c';
-          ctx.beginPath(); ctx.moveTo(exitX, 0); ctx.lineTo(exitX, c.height); ctx.stroke();
-          ctx.fillStyle = trade.result === 'WIN' ? '#00e896' : '#ff3b5c';
-          ctx.fillText('EXIT ' + trade.result, exitX + 5, 40);
-        }
-
-      } catch(e) {
-        ctx.clearRect(0, 0, c.width, c.height);
-        ctx.fillStyle = '#ff3b5c';
-        ctx.fillText('Failed to draw chart: ' + e.message, 20, c.height/2);
-      }
-    }
-
-    // ─── INIT ─────────────────────────────────────────────────────────────────────
-    loadState();
-    updateUI();
-    addLog('Bot initialized. Press START BOT to begin scanning Binance.', 'amber');
-    addLog(`Strategy: VWAP Crossunder + Flat Base`, 'blue');
-    addLog(`Margin: 2% of total balance | TP: 3× margin | SL: -30% balance | Max: 2 positions`, 'blue');
-  </script>
+</script>
 </body>
-
 </html>
