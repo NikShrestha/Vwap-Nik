@@ -143,6 +143,11 @@ async function fetchValidSymbols() {
     const r = await fetch(`${BINANCE}/exchangeInfo`, { signal: controller.signal });
     clearTimeout(timeoutId);
     const data = await r.json();
+    
+    if (!data.symbols) {
+       throw new Error(data.msg || JSON.stringify(data).substring(0, 100));
+    }
+    
     const valid = data.symbols
       .filter(s => s.status === 'TRADING' && s.quoteAsset === 'USDT')
       .map(s => s.symbol);
