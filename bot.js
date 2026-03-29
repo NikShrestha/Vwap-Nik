@@ -157,11 +157,24 @@ async function fetchTicker() {
   if (validSymbols.size === 0) await fetchValidSymbols();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10000);
-  const r = await fetch(`${BINANCE}/ticker/24hr`, { signal: controller.signal });
-  clearTimeout(timeoutId);
-  const tickers = await r.json();
-  if (!Array.isArray(tickers)) return [];
-  return tickers.filter(t => validSymbols.has(t.symbol));
+  
+  try {
+    const r = await fetch(`${BINANCE}/ticker/24hr`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    const text = await r.text();
+    let tickers;
+    try {
+      tickers = JSON.parse(text);
+    } catch(err) {
+      console.error('Binance API JSON Parse Error:', text.substring(0, 100));
+      return [];
+    }
+    if (!Array.isArray(tickers)) return [];
+    return tickers.filter(t => validSymbols.has(t.symbol));
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
 }
 async function fetchKlines(symbol, interval = '5m', limit = 100) {
   const r = await fetch(`${BINANCE}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
