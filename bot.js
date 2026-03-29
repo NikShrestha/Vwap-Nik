@@ -133,7 +133,7 @@ function sendPeriodicReport() {
 }
 
 // ─── BINANCE API ──────────────────────────────────────────────────────────────
-const BINANCE = 'https://fapi.binance.com/fapi/v1';
+const BINANCE = 'https://api.binance.com/api/v3';
 
 let validSymbols = new Set();
 async function fetchValidSymbols() {
@@ -141,7 +141,7 @@ async function fetchValidSymbols() {
     const r = await fetch(`${BINANCE}/exchangeInfo`);
     const data = await r.json();
     const valid = data.symbols
-      .filter(s => s.status === 'TRADING' && s.contractType === 'PERPETUAL' && s.quoteAsset === 'USDT')
+      .filter(s => s.status === 'TRADING' && s.quoteAsset === 'USDT')
       .map(s => s.symbol);
     validSymbols = new Set(valid);
   } catch (e) {
@@ -576,7 +576,30 @@ function stopBot() {
 // ─── EXPRESS API ─────────────────────────────────────────────────────────────
 
 app.get('/api/state', (req, res) => {
-  res.json(BOT);
+  res.json({
+    balance: BOT.balance,
+    startBalance: BOT.startBalance,
+    targetBalance: BOT.targetBalance,
+    running: BOT.running,
+    trades: BOT.trades,
+    activeTrades: BOT.activeTrades,
+    gainers: BOT.gainers,
+    selectedCoin: BOT.selectedCoin,
+    nextScanIn: BOT.nextScanIn,
+    maxPositions: BOT.maxPositions,
+    riskPct: BOT.riskPct,
+    tpMultiplier: BOT.tpMultiplier,
+    maxDrawdownPct: BOT.maxDrawdownPct,
+    minGain: BOT.minGain,
+    showGain: BOT.showGain,
+    leverage: BOT.leverage,
+    qualifiedCoins: BOT.qualifiedCoins,
+    trackingData: BOT.trackingData,
+    resets: BOT.resets,
+    highestBalance: BOT.highestBalance,
+    maxDrawdownAmt: BOT.maxDrawdownAmt,
+    logs: BOT.logs
+  });
 });
 
 app.post('/api/action', async (req, res) => {
