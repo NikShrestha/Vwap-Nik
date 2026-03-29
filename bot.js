@@ -138,7 +138,10 @@ const BINANCE = 'https://api.binance.com/api/v3';
 let validSymbols = new Set();
 async function fetchValidSymbols() {
   try {
-    const r = await fetch(`${BINANCE}/exchangeInfo`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const r = await fetch(`${BINANCE}/exchangeInfo`, { signal: controller.signal });
+    clearTimeout(timeoutId);
     const data = await r.json();
     const valid = data.symbols
       .filter(s => s.status === 'TRADING' && s.quoteAsset === 'USDT')
@@ -146,12 +149,16 @@ async function fetchValidSymbols() {
     validSymbols = new Set(valid);
   } catch (e) {
     console.error("Error fetching exchange info", e);
+    throw e;
   }
 }
 
 async function fetchTicker() {
   if (validSymbols.size === 0) await fetchValidSymbols();
-  const r = await fetch(`${BINANCE}/ticker/24hr`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  const r = await fetch(`${BINANCE}/ticker/24hr`, { signal: controller.signal });
+  clearTimeout(timeoutId);
   const tickers = await r.json();
   if (!Array.isArray(tickers)) return [];
   return tickers.filter(t => validSymbols.has(t.symbol));
