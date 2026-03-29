@@ -133,7 +133,7 @@ function sendPeriodicReport() {
 }
 
 // ─── BINANCE API ──────────────────────────────────────────────────────────────
-const BINANCE = 'https://api.binance.com/api/v3';
+const BINANCE = 'https://fapi.binance.com/fapi/v1';
 
 let validSymbols = new Set();
 async function fetchValidSymbols() {
@@ -149,7 +149,7 @@ async function fetchValidSymbols() {
     }
     
     const valid = data.symbols
-      .filter(s => s.status === 'TRADING' && s.quoteAsset === 'USDT')
+      .filter(s => s.status === 'TRADING' && s.contractType === 'PERPETUAL' && s.quoteAsset === 'USDT')
       .map(s => s.symbol);
     validSymbols = new Set(valid);
   } catch (e) {
