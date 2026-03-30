@@ -1575,6 +1575,12 @@
       }
     }
 
+    function cancelTrade(id) {
+      if (confirm("Are you sure you want to cancel this trade without recording any profit/loss? Your margin will be refunded.")) {
+        sendAction('cancel_trade', { id });
+      }
+    }
+
     function closeAllPositions() {
       if (confirm("Are you sure you want to Market Close all active trades?")) {
          BOT.activeTrades.forEach(t => sendAction('close_trade', { id: t.id }));

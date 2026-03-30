@@ -299,10 +299,12 @@ async function analyzeSymbol(symbol) {
     const fibLevels = calcFib(recentHigh, recentLow);
     
     if (hasFlatBase) {
-      const maxDropPct = (currentPrice - baseMaxVal) / currentPrice;
-      const maxRoi = maxDropPct * BOT.leverage * 100;
-      if (maxRoi >= 50) {
-        hasRoomToFall = true;
+      if (currentPrice > baseMaxVal) {
+        const maxDropPct = (currentPrice - baseMaxVal) / currentPrice;
+        const maxRoi = maxDropPct * BOT.leverage * 100;
+        if (maxRoi >= 50) {
+          hasRoomToFall = true;
+        }
       }
     }
 
@@ -395,39 +397,62 @@ async function checkActiveTrades() {
         sendTelegramMessage(`❌ <b>SL HIT ${t.symbol}</b>\n<b>Exit:</b> $${fmt(price)}\n<b>Loss:</b> -$${fmt(Math.abs(pnl))}\n<b>ROI:</b> -${fmt(Math.abs(pnl) / t.margin * 100)}%`);
       }
 
-      if (closed) {
-        const duration = Math.round((Date.now() - new Date(t.openTime).getTime()) / 1000 / 60);
-        
-        let exitAnalysisText = "";
-        try {
-          const exitA = await analyzeSymbol(t.symbol);
-          if (exitA) {
-            const exitRsi = exitA.rsi ? exitA.rsi.toFixed(1) : '?';
-            const exitVwap = exitA.currentVWAP ? fmt(exitA.currentVWAP, 4) : '?';
-            const cond = t.entryConditions || {};
-            exitAnalysisText = `[ENTRY CHECKS] FlatBase: ${cond.hasFlatBase||false}   [EXIT STATUS] RSI: ${exitRsi} | VWAP: $${exitVwap}`;
-          }
-        } catch(e) {}
+        if (closed) {
+          const duration = Math.round((Date.now() - new Date(t.openTime).getTime()) / 1000 / 60);
+          
+          let exitAnalysisText = "";
+          try {
+            const exitA = await analyzeSymbol(t.symbol);
+            if (exitA) {
+              const exitRsi = exitA.rsi ? exitA.rsi.toFixed(1) : '?';
+              const exitVwap = exitA.currentVWAP ? fmt(exitA.currentVWAP, 4) : '?';
+              const cond = t.entryConditions || {};
+              exitAnalysisText = `[ENTRY CHECKS] FlatBase: ${cond.hasFlatBase||false}   [EXIT STATUS] RSI: ${exitRsi} | VWAP: $${exitVwap}`;
+            }
+          } catch(e) {}
 
-        const closed_trade = {
-          ...t,
-          exitPrice: price,
-          closeTime: new Date(),
-          pnl, result,
-          durationMin: duration,
-          roiPct: +(pnl / t.margin * 100).toFixed(2),
-          balancePct: +(pnl / BOT.startBalance * 100).toFixed(2),
-          analysisText: exitAnalysisText
-        };
-        BOT.trades.push(closed_trade);
-        BOT.activeTrades.splice(i, 1);
-        BOT.balance = +(BOT.balance + t.margin + pnl).toFixed(4);
-        if (BOT.balance < 0) BOT.balance = 0;
-        saveState();
-        checkGameOver();
-        sendPeriodicReport();
-      }
-    } catch (e) { /* skip */ }
+          const closed_trade = {
+            ...t,
+            exitPrice: price,
+            closeTime: new Date(),
+            pnl, result,
+            durationMin: duration,
+            roiPct: +(pnl / t.margin * 100).toFixed(2),
+            balancePct: +(pnl / BOT.startBalance * 100).toFixed(2),
+            analysisText: exitAnalysisText
+          };
+          BOT.trades.push(closed_trade);
+          BOT.activeTrades.splice(i, 1);
+          BOT.balance = +(BOT.balance + t.margin + pnl).toFixed(4);
+          if (BOT.balance < 0) BOT.balance = 0;
+          saveState();
+          checkGameOver();
+          sendPeriodicReport();
+        } else {
+          // If not closed, check timeout
+          const duration = Math.round((Date.now() - new Date(t.openTime).getTime()) / 1000 / 60);
+          if (duration >= 1500 && pnl >= 0) {
+             // Close in profit after 1500m
+             pnl = +(((t.entryPrice - price) / t.entryPrice) * t.notional).toFixed(4);
+             result = 'WIN';
+             addLog(`⏱️ TIMEOUT CLOSE ${t.symbol} @ $${fmt(price)} | +$${fmt(pnl)}`, 'green');
+             sendTelegramMessage(`⏱️ <b>TIMEOUT CLOSE ${t.symbol}</b>\n<b>Exit:</b> $${fmt(price)}\n<b>Profit:</b> +$${fmt(pnl)}\n<b>Duration:</b> ${duration}m`);
+             
+             let exitAnalysisText = "[TIMEOUT CLOSE]";
+             const closed_trade = {
+               ...t, exitPrice: price, closeTime: new Date(), pnl, result, durationMin: duration,
+               roiPct: +(pnl / t.margin * 100).toFixed(2), balancePct: +(pnl / BOT.startBalance * 100).toFixed(2),
+               analysisText: exitAnalysisText
+             };
+             BOT.trades.push(closed_trade);
+             BOT.activeTrades.splice(i, 1);
+             BOT.balance = +(BOT.balance + t.margin + pnl).toFixed(4);
+             saveState();
+             checkGameOver();
+             sendPeriodicReport();
+          }
+        }
+      } catch (e) { /* skip */ }
   }
 }
 
@@ -724,6 +749,17 @@ app.post('/api/action', async (req, res) => {
         sendPeriodicReport();
       }
       res.json({ success: true });
+    } else if (action === 'cancel_trade') {
+      const idx = BOT.activeTrades.findIndex(t => t.id === payload.id);
+      if (idx !== -1) {
+        const t = BOT.activeTrades[idx];
+        BOT.activeTrades.splice(idx, 1);
+        BOT.balance = +(BOT.balance + t.margin).toFixed(4); // Refund the margin without profit/loss
+        saveState();
+        res.json({ success: true, msg: 'Trade cancelled and margin refunded' });
+      } else {
+        res.json({ success: false, msg: 'Trade not found' });
+      }
     } else if (action === 'analyze') {
        const a = await analyzeSymbol(payload.symbol);
        res.json({ success: true, analysis: a });
