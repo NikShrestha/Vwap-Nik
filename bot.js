@@ -30,7 +30,7 @@ let BOT = {
   riskPct: 0.02,
   tpMultiplier: 3,
   maxDrawdownPct: 0.30,
-  minGain: 30,
+  minGain: 15, // Lowered from 30 to 15 so you see more trades
   showGain: 10,
   leverage: 20,
   qualifiedCoins: [],
@@ -147,6 +147,10 @@ async function fetchValidSymbols() {
     const timeoutId = setTimeout(() => controller.abort(), 10000);
     const r = await fetch(`${BINANCE}/exchangeInfo`, { signal: controller.signal });
     clearTimeout(timeoutId);
+    
+    if (!r.ok) {
+       throw new Error(`ExchangeInfo fetch failed: ${r.status} ${r.statusText}`);
+    }
     const data = await r.json();
     
     if (!data.symbols) {
@@ -158,7 +162,7 @@ async function fetchValidSymbols() {
       .map(s => s.symbol);
     validSymbols = new Set(valid);
   } catch (e) {
-    console.error("Error fetching exchange info", e);
+    console.error("Error fetching exchange info", e.message);
     throw e;
   }
 }
@@ -201,22 +205,30 @@ async function fetchTicker() {
 }
 
 async function fetchKlines(symbol, interval = '5m', limit = 100) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
   try {
-    const r = await fetch(`${BINANCE}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+    const r = await fetch(`${BINANCE}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, { signal: controller.signal });
+    clearTimeout(timeoutId);
     if (!r.ok) return [];
     return await r.json();
   } catch (e) {
+    clearTimeout(timeoutId);
     console.error(`Error fetching klines for ${symbol}:`, e.message);
     return [];
   }
 }
 
 async function fetchPrice(symbol) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
   try {
-    const r = await fetch(`${BINANCE}/ticker/price?symbol=${symbol}`);
+    const r = await fetch(`${BINANCE}/ticker/price?symbol=${symbol}`, { signal: controller.signal });
+    clearTimeout(timeoutId);
     if (!r.ok) throw new Error(`Status ${r.status}`);
     return await r.json();
   } catch (e) {
+    clearTimeout(timeoutId);
     console.error(`Error fetching price for ${symbol}:`, e.message);
     throw e;
   }
@@ -501,8 +513,10 @@ function checkGameOver() {
   }
 }
 
+let isScanning = false;
 async function scan() {
-  if (!BOT.running) return;
+  if (!BOT.running || isScanning) return;
+  isScanning = true;
   const now = Date.now();
   
   if (!BOT.lastGainerScan || now - BOT.lastGainerScan >= 120000) {
@@ -627,7 +641,7 @@ async function scan() {
                   price: analysis.currentPrice,
                   vwap: analysis.currentVWAP,
                   flat: analysis.hasFlatBase ? "YES" : "NO",
-                  high: BOT.trackingData[sym] ? BOT.trackingData[sym].high : 30
+                  high: BOT.trackingData[sym] ? BOT.trackingData[sym].high : BOT.minGain
                };
             }
          } catch (e) {}
@@ -635,6 +649,8 @@ async function scan() {
     }
   } catch (e) {
     addLog('⚠️ Scan error: ' + e.message, 'red');
+  } finally {
+    isScanning = false;
   }
 }
 
@@ -657,31 +673,42 @@ function stopBot() {
 
 // ─── EXPRESS API ─────────────────────────────────────────────────────────────
 
+process.on('uncaughtException', err => {
+  console.error('Uncaught Exception:', err);
+});
+process.on('unhandledRejection', reason => {
+  console.error('Unhandled Rejection:', reason);
+});
+
 app.get('/api/state', (req, res) => {
-  res.json({
-    balance: BOT.balance,
-    startBalance: BOT.startBalance,
-    targetBalance: BOT.targetBalance,
-    running: BOT.running,
-    trades: BOT.trades,
-    activeTrades: BOT.activeTrades,
-    gainers: BOT.gainers,
-    selectedCoin: BOT.selectedCoin,
-    nextScanIn: BOT.nextScanIn,
-    maxPositions: BOT.maxPositions,
-    riskPct: BOT.riskPct,
-    tpMultiplier: BOT.tpMultiplier,
-    maxDrawdownPct: BOT.maxDrawdownPct,
-    minGain: BOT.minGain,
-    showGain: BOT.showGain,
-    leverage: BOT.leverage,
-    qualifiedCoins: BOT.qualifiedCoins,
-    trackingData: BOT.trackingData,
-    resets: BOT.resets,
-    highestBalance: BOT.highestBalance,
-    maxDrawdownAmt: BOT.maxDrawdownAmt,
-    logs: BOT.logs
-  });
+  try {
+    res.json({
+      balance: BOT.balance,
+      startBalance: BOT.startBalance,
+      targetBalance: BOT.targetBalance,
+      running: BOT.running,
+      trades: BOT.trades,
+      activeTrades: BOT.activeTrades,
+      gainers: BOT.gainers,
+      selectedCoin: BOT.selectedCoin,
+      nextScanIn: BOT.nextScanIn,
+      maxPositions: BOT.maxPositions,
+      riskPct: BOT.riskPct,
+      tpMultiplier: BOT.tpMultiplier,
+      maxDrawdownPct: BOT.maxDrawdownPct,
+      minGain: BOT.minGain,
+      showGain: BOT.showGain,
+      leverage: BOT.leverage,
+      qualifiedCoins: BOT.qualifiedCoins,
+      trackingData: BOT.trackingData,
+      resets: BOT.resets,
+      highestBalance: BOT.highestBalance,
+      maxDrawdownAmt: BOT.maxDrawdownAmt,
+      logs: BOT.logs
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.post('/api/action', async (req, res) => {
