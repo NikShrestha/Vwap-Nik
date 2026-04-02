@@ -41,6 +41,8 @@ let BOT = {
   logs: [] // added for backend logs
 };
 
+const STATE_FILE = process.env.DATA_DIR ? path.join(process.env.DATA_DIR, 'bot_state.json') : 'bot_state.json';
+
 function saveState() {
   const state = {
     balance: BOT.balance,
@@ -52,13 +54,13 @@ function saveState() {
     highestBalance: BOT.highestBalance,
     maxDrawdownAmt: BOT.maxDrawdownAmt
   };
-  fs.writeFileSync('bot_state.json', JSON.stringify(state, null, 2));
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
 function loadState() {
   try {
-    if (fs.existsSync('bot_state.json')) {
-      const saved = fs.readFileSync('bot_state.json', 'utf8');
+    if (fs.existsSync(STATE_FILE)) {
+      const saved = fs.readFileSync(STATE_FILE, 'utf8');
       const p = JSON.parse(saved);
       if (p.balance !== undefined) BOT.balance = p.balance;
       if (p.startBalance !== undefined) BOT.startBalance = p.startBalance;
