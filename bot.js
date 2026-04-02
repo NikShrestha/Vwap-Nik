@@ -624,10 +624,13 @@ const SESSION_START = Date.now();
 
 app.get('/api/state', (req, res) => {
   try {
-    res.json({
+    const safeBot = {
       ...BOT,
+      scanInterval: !!BOT.scanInterval, // Convert Timeout object to boolean for UI
+      priceInterval: !!BOT.priceInterval, // Convert Timeout object to boolean for UI
       uptime: Date.now() - SESSION_START
-    });
+    };
+    res.json(safeBot);
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
