@@ -104,13 +104,16 @@ async function sendTelegramMessage(text) {
   if (!TG_TOKEN || !TG_CHAT_ID) return;
   try {
     const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`;
-    await fetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: TG_CHAT_ID, text: text, parse_mode: 'HTML' })
     });
+    if (!res.ok) {
+      console.error(`Telegram API responded with ${res.status}: ${await res.text()}`);
+    }
   } catch (e) {
-    console.error("Telegram error:", e);
+    console.error("Telegram error:", e.message);
   }
 }
 
@@ -161,13 +164,25 @@ async function fetchValidSymbols() {
 }
 
 async function fetchTicker() {
-  if (validSymbols.size === 0) await fetchValidSymbols();
+  try {
+    if (validSymbols.size === 0) await fetchValidSymbols();
+  } catch (err) {
+    console.error("Failed to fetch valid symbols in fetchTicker:", err);
+    return [];
+  }
+  
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10000);
   
   try {
     const r = await fetch(`${BINANCE}/ticker/24hr`, { signal: controller.signal });
     clearTimeout(timeoutId);
+    
+    if (!r.ok) {
+      console.error(`Binance Ticker API error: ${r.status} ${r.statusText}`);
+      return [];
+    }
+
     const text = await r.text();
     let tickers;
     try {
@@ -180,16 +195,31 @@ async function fetchTicker() {
     return tickers.filter(t => validSymbols.has(t.symbol));
   } catch (err) {
     clearTimeout(timeoutId);
-    throw err;
+    console.error('Binance fetchTicker Error:', err.message);
+    return [];
   }
 }
+
 async function fetchKlines(symbol, interval = '5m', limit = 100) {
-  const r = await fetch(`${BINANCE}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
-  return r.json();
+  try {
+    const r = await fetch(`${BINANCE}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+    if (!r.ok) return [];
+    return await r.json();
+  } catch (e) {
+    console.error(`Error fetching klines for ${symbol}:`, e.message);
+    return [];
+  }
 }
+
 async function fetchPrice(symbol) {
-  const r = await fetch(`${BINANCE}/ticker/price?symbol=${symbol}`);
-  return r.json();
+  try {
+    const r = await fetch(`${BINANCE}/ticker/price?symbol=${symbol}`);
+    if (!r.ok) throw new Error(`Status ${r.status}`);
+    return await r.json();
+  } catch (e) {
+    console.error(`Error fetching price for ${symbol}:`, e.message);
+    throw e;
+  }
 }
 
 function calcVWAP(klines) {
@@ -775,8 +805,8 @@ app.post('/api/action', async (req, res) => {
 
 loadState();
 
-// Start bot if it was running or auto-start is fine, but lets default to waiting for UI.
-addLog('Bot backend initialized. Waiting for START command.', 'blue');
+// Auto-start the bot when the server starts
+startBot();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on port ${PORT}`);
