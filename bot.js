@@ -609,16 +609,22 @@ function stopBot() {
   addLog('Bot paused safely.', 'amber');
 }
 
-// ─── EXPRESS API ROUTES ──────────────────────────────────────────────────────
+// ─── ERROR HANDLING & BOOTSTRAP ──────────────────────────────────────────────
+process.on('uncaughtException', err => console.error('Uncaught Exception:', err));
+process.on('unhandledRejection', reason => console.error('Unhandled Rejection:', reason));
+
+const SESSION_START = Date.now();
+
 app.get('/api/state', (req, res) => {
   try {
-    res.json(BOT);
+    res.json({
+      ...BOT,
+      uptime: Date.now() - SESSION_START
+    });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
 });
-
-app.post('/api/action', async (req, res) => {
   const { action, payload } = req.body;
   try {
     if (action === 'start') {

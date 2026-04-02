@@ -119,6 +119,7 @@
 
     <div class="market-banner">
         <span>BTCUSDT: <span class="text-blue" id="btc-price">Loading...</span></span>
+        <span>Uptime: <span class="text-green" id="bot-uptime">00:00:00</span></span>
         <span>Market Scan Interval: <span class="text-yellow">20s</span></span>
         <span>Active Tracked Coins: <span class="text-blue" id="tracked-coins">0</span></span>
     </div>
@@ -347,26 +348,38 @@
             }
         }
 
+        function formatUptime(ms) {
+            if (!ms) return '00:00:00';
+            let totalSeconds = Math.floor(ms / 1000);
+            let hours = Math.floor(totalSeconds / 3600);
+            totalSeconds %= 3600;
+            let minutes = Math.floor(totalSeconds / 60);
+            let seconds = totalSeconds % 60;
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+
         function updateUI() {
             if (!BOT) return;
+            try {
+                // Header Status
+                const statusEl = document.getElementById('engine-status');
+                const btnEl = document.getElementById('toggle-bot-btn');
+                if (BOT.running) {
+                    statusEl.textContent = 'ONLINE';
+                    statusEl.className = 'text-green blink';
+                    btnEl.textContent = 'PAUSE BOT';
+                    btnEl.className = 'danger';
+                } else {
+                    statusEl.textContent = 'OFFLINE';
+                    statusEl.className = 'text-red';
+                    btnEl.textContent = 'START BOT';
+                    btnEl.className = '';
+                }
 
-            // Header Status
-            const statusEl = document.getElementById('engine-status');
-            const btnEl = document.getElementById('toggle-bot-btn');
-            if (BOT.running) {
-                statusEl.textContent = 'ONLINE';
-                statusEl.className = 'text-green blink';
-                btnEl.textContent = 'PAUSE BOT';
-                btnEl.className = 'danger';
-            } else {
-                statusEl.textContent = 'OFFLINE';
-                statusEl.className = 'text-red';
-                btnEl.textContent = 'START BOT';
-                btnEl.className = '';
-            }
+                document.getElementById('bot-uptime').textContent = formatUptime(BOT.uptime);
 
-            // Stats
-            const pnl = BOT.balance - BOT.startBalance;
+                // Stats
+                const pnl = BOT.balance - BOT.startBalance;
             const roi = (pnl / BOT.startBalance) * 100;
             const wins = BOT.trades.filter(t => t.result && t.result.includes('WIN'));
             const losses = BOT.trades.filter(t => t.result && t.result.includes('LOSS'));
@@ -495,10 +508,13 @@
                 }).join('');
             }
             
-            fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT')
-                .then(r => r.json())
-                .then(d => { document.getElementById('btc-price').textContent = `$${Number(d.price).toLocaleString()}`; })
-                .catch(() => {});
+                fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT')
+                    .then(r => r.json())
+                    .then(d => { document.getElementById('btc-price').textContent = `$${Number(d.price).toLocaleString()}`; })
+                    .catch(() => {});
+            } catch(e) {
+                console.error("UI Render Error:", e);
+            }
         }
 
         function toggleBot() {
