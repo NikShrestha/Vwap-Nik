@@ -87,6 +87,8 @@ function loadState() {
       if (saved.resets !== undefined) BOT.resets = saved.resets;
       if (saved.highestBalance !== undefined) BOT.highestBalance = saved.highestBalance;
       if (saved.maxDrawdownAmt !== undefined) BOT.maxDrawdownAmt = saved.maxDrawdownAmt;
+      // Force it to be running true even if saved as false
+      BOT.running = true;
     }
   } catch (e) { 
     console.error('Error loading bot state', e.message); 
@@ -598,9 +600,9 @@ async function scan() {
 function startBot() {
   BOT.running = true;
   addLog('🚀 Advanced Bot Engine Started. Scanning market...', 'green');
-  scan();
   if (BOT.scanInterval) clearInterval(BOT.scanInterval);
   if (BOT.priceInterval) clearInterval(BOT.priceInterval);
+  scan();
   BOT.scanInterval = setInterval(scan, 20000); // 20s interval
   BOT.priceInterval = setInterval(checkActiveTrades, 3000); // 3s fast price check
 }
