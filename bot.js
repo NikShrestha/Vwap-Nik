@@ -598,6 +598,7 @@ async function scan() {
 
 // ─── LIFECYCLE ───────────────────────────────────────────────────────────────
 function startBot() {
+  if (BOT.running && BOT.scanInterval) return; // Prevent multiple instances
   BOT.running = true;
   addLog('🚀 Advanced Bot Engine Started. Scanning market...', 'green');
   if (BOT.scanInterval) clearInterval(BOT.scanInterval);
