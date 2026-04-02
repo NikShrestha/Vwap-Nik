@@ -5,7 +5,16 @@ const fetch = global.fetch || ((...args) => import('node-fetch').then(({default:
 
 const app = express();
 app.use(express.json());
-app.use(express.static('public'));
+
+// Serve the HTML file directly when someone visits the URL
+app.get('/', (req, res) => {
+    try {
+        const htmlContent = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+        res.send(htmlContent);
+    } catch (err) {
+        res.status(500).send("Error loading simulator UI.");
+    }
+});
 
 const PORT = process.env.PORT || 8080;
 const TG_TOKEN = process.env.TG_TOKEN || '';

@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ VWAP Scalper Pro</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #080810;
+            --card-bg: #0f0f20;
+            --text-main: #e0e0e0;
+            --text-dim: #8b8b9e;
+            --accent-blue: #00c8ff;
+            --accent-red: #dc143c;
+            --profit-green: #00ff88;
+            --loss-red: #ff3860;
+            --border-color: #1a1a2e;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: var(--font-mono);
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-size: 13px;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg-color); }
+        ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--accent-blue); }
+
+        .text-green { color: var(--profit-green); }
+        .text-red { color: var(--loss-red); }
+        .text-blue { color: var(--accent-blue); }
+        .text-yellow { color: #ffd700; }
+        .blink { animation: blinker 1.5s linear infinite; }
+        @keyframes blinker { 50% { opacity: 0; } }
+
+        .header-bar {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 10px 20px; background-color: var(--card-bg);
+            border-bottom: 1px solid var(--accent-blue);
+            box-shadow: 0 0 15px rgba(0, 200, 255, 0.2);
+        }
+
+        .market-banner {
+            text-align: center; padding: 8px; font-weight: bold; letter-spacing: 1px;
+            border-bottom: 1px solid var(--border-color); background: #141425;
+            display: flex; justify-content: space-around;
+        }
+
+        .main-container { display: flex; flex: 1; overflow: hidden; }
+        .left-panel { flex: 3; display: flex; flex-direction: column; overflow-y: auto; padding: 15px; gap: 15px; }
+        .right-panel { flex: 1; min-width: 350px; background-color: var(--card-bg); border-left: 1px solid var(--border-color); display: flex; flex-direction: column; overflow-y: auto; }
+
+        .stat-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px; }
+        
+        .card {
+            background-color: var(--card-bg); border: 1px solid var(--border-color);
+            border-radius: 6px; padding: 15px; position: relative; transition: box-shadow 0.3s;
+        }
+        .card:hover { box-shadow: 0 0 10px rgba(0, 200, 255, 0.1); }
+        
+        .card-header { display: flex; justify-content: space-between; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #2a2a3e; font-weight: bold; }
+        .metric-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+        
+        .chart-container { height: 250px; background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid var(--border-color); }
+        th { color: var(--text-dim); font-weight: normal; top: 0; position: sticky; background: var(--card-bg); }
+        tbody tr:hover { background-color: rgba(255,255,255,0.02); }
+        .table-wrapper { max-height: 250px; overflow-y: auto; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; }
+
+        .panel-header { padding: 15px; background: #141425; border-bottom: 1px solid var(--border-color); font-weight: bold; }
+        .log-container { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 10px; font-size: 11px; }
+        .log-entry { background: #12121c; border: 1px solid #2a2a3e; border-radius: 4px; padding: 8px; }
+        
+        button { background: var(--accent-blue); color: #000; border: none; padding: 8px 12px; font-family: var(--font-mono); font-weight: bold; border-radius: 4px; cursor: pointer; transition: 0.2s; }
+        button:hover { background: #fff; box-shadow: 0 0 10px var(--accent-blue); }
+        button.danger { background: var(--loss-red); color: #fff; }
+        button.danger:hover { background: #ff5e7e; box-shadow: 0 0 10px var(--loss-red); }
+        
+        input { background: #12121c; border: 1px solid #2a2a3e; color: var(--text-main); padding: 5px; font-family: var(--font-mono); border-radius: 3px; }
+        
+        .badge { padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: bold; }
+        .badge.short { background: rgba(255, 56, 96, 0.2); color: var(--loss-red); border: 1px solid var(--loss-red); }
+        
+        .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .setting-item { display: flex; flex-direction: column; gap: 5px; }
+        
+        .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--card-bg); border: 1px solid var(--accent-blue); padding: 10px 20px; border-radius: 5px; z-index: 1000; box-shadow: 0 0 20px rgba(0, 200, 255, 0.2); font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div class="header-bar">
+        <div>
+            <h2>⚡ VWAP Scalper Pro</h2>
+            <span style="color: var(--text-dim); font-size: 11px;">Binance Paper Trading Engine</span>
+        </div>
+        <div style="display: flex; gap: 20px; align-items: center;">
+            <div style="text-align: right;">
+                <div style="color: var(--text-dim);">Engine Status</div>
+                <div id="engine-status" class="text-red blink" style="font-weight: bold; font-size: 16px;">OFFLINE</div>
+            </div>
+            <button id="toggle-bot-btn" onclick="toggleBot()">START BOT</button>
+        </div>
+    </div>
+
+    <div class="market-banner">
+        <span>BTCUSDT: <span class="text-blue" id="btc-price">Loading...</span></span>
+        <span>Market Scan Interval: <span class="text-yellow">20s</span></span>
+        <span>Active Tracked Coins: <span class="text-blue" id="tracked-coins">0</span></span>
+    </div>
+
+    <div class="main-container">
+        <!-- LEFT PANEL -->
+        <div class="left-panel">
+            
+            <!-- STATS GRID -->
+            <div class="stat-grid">
+                <div class="card">
+                    <div class="card-header">Total Balance <span class="text-blue">USD</span></div>
+                    <div style="font-size: 24px; font-weight: bold;" id="total-balance">$0.00</div>
+                    <div class="metric-row" style="margin-top: 10px;">
+                        <span class="text-dim">Net P&L:</span>
+                        <span id="net-pnl" class="text-green">+$0.00</span>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">ROI</div>
+                    <div style="font-size: 24px; font-weight: bold;" id="total-roi" class="text-green">0.00%</div>
+                    <div class="metric-row" style="margin-top: 10px;">
+                        <span class="text-dim">Start Bal:</span>
+                        <span id="start-balance">$0.00</span>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">Win Rate</div>
+                    <div style="font-size: 24px; font-weight: bold;" id="win-rate">0.0%</div>
+                    <div class="metric-row" style="margin-top: 10px;">
+                        <span class="text-dim">Trades:</span>
+                        <span id="total-trades">0</span>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">Max Drawdown</div>
+                    <div style="font-size: 24px; font-weight: bold;" id="max-drawdown" class="text-red">$0.00</div>
+                    <div class="metric-row" style="margin-top: 10px;">
+                        <span class="text-dim">Resets:</span>
+                        <span id="account-resets">0</span>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">Profit Factor</div>
+                    <div style="font-size: 24px; font-weight: bold;" id="profit-factor" class="text-blue">0.00</div>
+                    <div class="metric-row" style="margin-top: 10px;">
+                        <span class="text-dim">W/L:</span>
+                        <span id="win-loss">0 / 0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CHART -->
+            <div class="chart-container">
+                <canvas id="balanceChart"></canvas>
+            </div>
+
+            <div style="display: flex; gap: 15px; height: 350px;">
+                <!-- ACTIVE POSITIONS -->
+                <div class="table-wrapper" style="flex: 2; height: 100%;">
+                    <div class="panel-header" style="position: sticky; top: 0; z-index: 10; display:flex; justify-content:space-between;">
+                        <span>⚡ Active Positions (<span id="active-count">0</span>)</span>
+                        <button class="danger" style="padding: 2px 8px; font-size: 10px;" onclick="closeAllPositions()">CLOSE ALL</button>
+                    </div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Side</th>
+                                <th>Entry</th>
+                                <th>Current</th>
+                                <th>Margin</th>
+                                <th>TP/SL</th>
+                                <th>Unrealized P&L</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="active-trades-body">
+                            <tr><td colspan="8" style="text-align: center; color: var(--text-dim); padding: 20px;">No open positions.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- GAINERS TRACKER -->
+                <div class="table-wrapper" style="flex: 1; height: 100%;">
+                    <div class="panel-header" style="position: sticky; top: 0; z-index: 10;">
+                        🔍 Top Gainers Watchlist
+                    </div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Coin</th>
+                                <th>24h %</th>
+                                <th>VWAP Diff</th>
+                            </tr>
+                        </thead>
+                        <tbody id="gainers-body">
+                            <tr><td colspan="3" style="text-align: center; color: var(--text-dim); padding: 20px;">Scanning...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- CLOSED TRADES -->
+            <div class="table-wrapper" style="max-height: 400px;">
+                <div class="panel-header" style="position: sticky; top: 0; z-index: 10;">
+                    📜 Trade History
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Symbol</th>
+                            <th>Side</th>
+                            <th>Lev.</th>
+                            <th>Entry</th>
+                            <th>Exit</th>
+                            <th>Result</th>
+                            <th>P&L</th>
+                            <th>ROI</th>
+                            <th>Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody id="closed-trades-body">
+                        <tr><td colspan="10" style="text-align: center; color: var(--text-dim); padding: 20px;">No trades yet.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+        </div>
+
+        <!-- RIGHT PANEL -->
+        <div class="right-panel">
+            <div class="panel-header">⚙️ Engine Settings</div>
+            <div style="padding: 15px; border-bottom: 1px solid var(--border-color);">
+                <div class="settings-grid">
+                    <div class="setting-item">
+                        <label class="text-dim">Start Balance</label>
+                        <div style="display:flex; gap:5px;">
+                            <input type="number" id="set-bal-input" placeholder="100" style="width: 100%;">
+                            <button onclick="setBalance()">SET</button>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <label class="text-dim">Manual Short</label>
+                        <div style="display:flex; gap:5px;">
+                            <input type="text" id="manual-sym" placeholder="BTCUSDT" style="width: 100%;">
+                            <button onclick="manualTrade()">GO</button>
+                        </div>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button class="danger" style="flex: 1;" onclick="resetState()">RESET ALL DATA</button>
+                </div>
+            </div>
+
+            <div class="panel-header">📡 Live Terminal Logs</div>
+            <div class="log-container" id="terminal-logs">
+                <div class="log-entry" style="color: var(--text-dim);">Waiting for engine to start...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let BOT = null;
+        let chart = null;
+
+        function fmt(n, d = 4) { return Number(n).toFixed(d); }
+        function fmtP(n) { return (n >= 0 ? '+' : '') + Number(n).toFixed(2); }
+
+        function initChart() {
+            const ctx = document.getElementById('balanceChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Start'],
+                    datasets: [{
+                        label: 'Account Balance',
+                        data: [100],
+                        borderColor: '#00c8ff',
+                        backgroundColor: 'rgba(0, 200, 255, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.2,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { display: false },
+                        y: { 
+                            grid: { color: '#1a1a2e' },
+                            ticks: { color: '#8b8b9e', callback: (val) => '$' + val }
+                        }
+                    },
+                    animation: { duration: 0 }
+                }
+            });
+        }
+
+        async function fetchState() {
+            try {
+                const res = await fetch('/api/state');
+                BOT = await res.json();
+                updateUI();
+            } catch (e) {
+                console.error("Failed to fetch state");
+            }
+        }
+
+        async function sendAction(action, payload = {}) {
+            try {
+                const res = await fetch('/api/action', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action, payload})
+                });
+                const data = await res.json();
+                if(data.success) fetchState();
+                else alert("Error: " + data.msg);
+            } catch(e) {
+                console.error(e);
+            }
+        }
+
+        function updateUI() {
+            if (!BOT) return;
+
+            // Header Status
+            const statusEl = document.getElementById('engine-status');
+            const btnEl = document.getElementById('toggle-bot-btn');
+            if (BOT.running) {
+                statusEl.textContent = 'ONLINE';
+                statusEl.className = 'text-green blink';
+                btnEl.textContent = 'PAUSE BOT';
+                btnEl.className = 'danger';
+            } else {
+                statusEl.textContent = 'OFFLINE';
+                statusEl.className = 'text-red';
+                btnEl.textContent = 'START BOT';
+                btnEl.className = '';
+            }
+
+            // Stats
+            const pnl = BOT.balance - BOT.startBalance;
+            const roi = (pnl / BOT.startBalance) * 100;
+            const wins = BOT.trades.filter(t => t.result && t.result.includes('WIN'));
+            const losses = BOT.trades.filter(t => t.result && t.result.includes('LOSS'));
+            const wr = BOT.trades.length ? (wins.length / BOT.trades.length * 100) : 0;
+            
+            let grossWin = wins.reduce((a, t) => a + t.pnl, 0);
+            let grossLoss = Math.abs(losses.reduce((a, t) => a + t.pnl, 0));
+            const pf = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? 99.9 : 0);
+
+            document.getElementById('total-balance').textContent = `$${fmt(BOT.balance, 2)}`;
+            document.getElementById('start-balance').textContent = `$${fmt(BOT.startBalance, 2)}`;
+            document.getElementById('net-pnl').textContent = `${fmtP(pnl)}`;
+            document.getElementById('net-pnl').className = pnl >= 0 ? 'text-green' : 'text-red';
+            document.getElementById('total-roi').textContent = `${fmtP(roi)}%`;
+            document.getElementById('total-roi').className = roi >= 0 ? 'text-green' : 'text-red';
+            document.getElementById('win-rate').textContent = `${fmt(wr, 1)}%`;
+            document.getElementById('total-trades').textContent = BOT.trades.length;
+            document.getElementById('max-drawdown').textContent = `-$${fmt(BOT.maxDrawdownAmt, 2)}`;
+            document.getElementById('account-resets').textContent = BOT.resets || 0;
+            document.getElementById('profit-factor').textContent = fmt(pf, 2);
+            document.getElementById('win-loss').textContent = `${wins.length} / ${losses.length}`;
+            document.getElementById('tracked-coins').textContent = BOT.qualifiedCoins ? BOT.qualifiedCoins.length : 0;
+
+            // Chart Update
+            if (chart) {
+                const balances = [BOT.startBalance];
+                let currentBal = BOT.startBalance;
+                BOT.trades.forEach(t => {
+                    currentBal += t.pnl;
+                    balances.push(currentBal);
+                });
+                chart.data.labels = balances.map((_, i) => i === 0 ? 'Start' : `T${i}`);
+                chart.data.datasets[0].data = balances;
+                chart.update();
+            }
+
+            // Active Trades
+            const atBody = document.getElementById('active-trades-body');
+            document.getElementById('active-count').textContent = BOT.activeTrades.length;
+            if (BOT.activeTrades.length === 0) {
+                atBody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-dim); padding: 20px;">No open positions. Scanning...</td></tr>`;
+            } else {
+                atBody.innerHTML = BOT.activeTrades.map(t => {
+                    const upnl = t.unrealizedPnl || 0;
+                    const pnlClass = upnl >= 0 ? 'text-green' : 'text-red';
+                    return `
+                        <tr>
+                            <td><strong>${t.symbol}</strong><br><span class="badge short">SHORT</span></td>
+                            <td>${t.leverage}x</td>
+                            <td>$${fmt(t.entryPrice, 5)}</td>
+                            <td>$${fmt(t.currentPrice, 5)}</td>
+                            <td>$${fmt(t.margin, 2)}</td>
+                            <td>
+                                TP: <span class="text-green">$${fmt(t.tpPrice, 5)}</span><br>
+                                SL: <span class="text-red">$${fmt(t.slPrice, 5)}</span>
+                            </td>
+                            <td class="${pnlClass}" style="font-weight:bold;">${fmtP(upnl)}<br>
+                                <span style="font-size:10px">${fmtP(upnl/t.margin*100)}%</span>
+                            </td>
+                            <td>
+                                <button class="danger" style="padding: 4px 8px; font-size: 10px;" onclick="sendAction('close_trade', {id: ${t.id}})">CLOSE</button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            // Gainers
+            const gBody = document.getElementById('gainers-body');
+            if (!BOT.gainers || BOT.gainers.length === 0) {
+                gBody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--text-dim); padding: 20px;">Waiting for scan...</td></tr>`;
+            } else {
+                gBody.innerHTML = BOT.gainers.slice(0, 15).map(g => {
+                    const tData = BOT.trackingData ? BOT.trackingData[g.symbol] : null;
+                    let vwapDiff = "—";
+                    if (tData && tData.vwap) {
+                        const diff = ((tData.price - tData.vwap) / tData.vwap * 100);
+                        vwapDiff = `<span class="${diff >= 0 ? 'text-blue' : 'text-red'}">${fmtP(diff)}%</span>`;
+                    }
+                    return `
+                        <tr>
+                            <td style="font-weight:bold;">${g.symbol.replace('USDT','')}</td>
+                            <td class="text-green">+${fmt(g.priceChangePercent, 1)}%</td>
+                            <td>${vwapDiff}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            // Closed Trades
+            const ctBody = document.getElementById('closed-trades-body');
+            if (BOT.trades.length === 0) {
+                ctBody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: var(--text-dim); padding: 20px;">No trades yet.</td></tr>`;
+            } else {
+                ctBody.innerHTML = [...BOT.trades].reverse().map(t => {
+                    const isWin = t.result.includes('WIN');
+                    const color = isWin ? 'text-green' : 'text-red';
+                    return `
+                        <tr>
+                            <td class="text-dim" style="font-size:10px">${new Date(t.closeTime).toLocaleTimeString()}</td>
+                            <td style="font-weight:bold">${t.symbol}</td>
+                            <td><span class="badge short">SHORT</span></td>
+                            <td>${t.leverage}x</td>
+                            <td>$${fmt(t.entryPrice, 5)}</td>
+                            <td>$${fmt(t.exitPrice, 5)}</td>
+                            <td class="${color}" style="font-weight:bold">${t.result}</td>
+                            <td class="${color}">${fmtP(t.pnl)}</td>
+                            <td class="${color}">${fmtP(t.roiPct)}%</td>
+                            <td class="text-dim">${t.durationMin}m</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            // Logs
+            const logBox = document.getElementById('terminal-logs');
+            if (BOT.logs && BOT.logs.length > 0) {
+                logBox.innerHTML = BOT.logs.map(l => {
+                    let c = 'text-main';
+                    if (l.type === 'green') c = 'text-green';
+                    if (l.type === 'red') c = 'text-red';
+                    if (l.type === 'blue') c = 'text-blue';
+                    if (l.type === 'amber') c = 'text-yellow';
+                    if (l.type === 'dim') c = 'text-dim';
+                    return `<div class="log-entry ${c}">[${l.time}] ${l.msg}</div>`;
+                }).join('');
+            }
+            
+            fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT')
+                .then(r => r.json())
+                .then(d => { document.getElementById('btc-price').textContent = `$${Number(d.price).toLocaleString()}`; })
+                .catch(() => {});
+        }
+
+        function toggleBot() {
+            sendAction(BOT.running ? 'stop' : 'start');
+        }
+
+        function resetState() {
+            if(confirm("DANGER: WIPE ALL BOT DATA?")) sendAction('reset');
+        }
+
+        function setBalance() {
+            const b = document.getElementById('set-bal-input').value;
+            if(b) sendAction('set_balance', { balance: b });
+            document.getElementById('set-bal-input').value = '';
+        }
+
+        function manualTrade() {
+            const sym = document.getElementById('manual-sym').value.toUpperCase();
+            if(!sym) return;
+            const p = prompt(`Enter entry price for ${sym}:`);
+            if(p && !isNaN(p)) sendAction('manual_trade', { symbol: sym, entryPrice: p });
+            document.getElementById('manual-sym').value = '';
+        }
+
+        function closeAllPositions() {
+            if(confirm("Market close all open positions?")) {
+                BOT.activeTrades.forEach(t => sendAction('close_trade', { id: t.id }));
+            }
+        }
+
+        initChart();
+        setInterval(fetchState, 2000);
+        fetchState();
+    </script>
+</body>
+</html>
