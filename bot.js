@@ -625,6 +625,7 @@ app.get('/api/state', (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+app.post('/api/action', async (req, res) => {
   const { action, payload } = req.body;
   try {
     if (action === 'start') {
