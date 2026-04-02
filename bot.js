@@ -105,7 +105,10 @@ function fmt(n, d = 4) { return (+n).toFixed(d); }
 function fmtP(n) { return (n >= 0 ? '+' : '') + (+n).toFixed(2); }
 
 async function sendTelegramMessage(text) {
-  if (!TG_TOKEN || !TG_CHAT_ID) return;
+  if (!TG_TOKEN || !TG_CHAT_ID) {
+    console.log("TG_TOKEN or TG_CHAT_ID not provided. Message skipped:", text);
+    return;
+  }
   try {
     const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`;
     const res = await fetch(url, {
@@ -113,7 +116,7 @@ async function sendTelegramMessage(text) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' })
     });
-    if (!res.ok) console.error(`Telegram API error: ${res.status}`);
+    if (!res.ok) console.error(`Telegram API error: ${res.status} ${res.statusText}`);
   } catch (e) {
     console.error("Telegram network error:", e.message);
   }
@@ -593,10 +596,11 @@ async function scan() {
 
 // ─── LIFECYCLE ───────────────────────────────────────────────────────────────
 function startBot() {
-  if (BOT.running) return;
   BOT.running = true;
   addLog('🚀 Advanced Bot Engine Started. Scanning market...', 'green');
   scan();
+  if (BOT.scanInterval) clearInterval(BOT.scanInterval);
+  if (BOT.priceInterval) clearInterval(BOT.priceInterval);
   BOT.scanInterval = setInterval(scan, 20000); // 20s interval
   BOT.priceInterval = setInterval(checkActiveTrades, 3000); // 3s fast price check
 }
