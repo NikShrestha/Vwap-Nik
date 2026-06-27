@@ -622,6 +622,12 @@ process.on('unhandledRejection', reason => console.error('Unhandled Rejection:',
 
 const SESSION_START = Date.now();
 
+// Lightweight endpoint for uptime pingers (UptimeRobot/cron-job.org) to keep
+// Render's free instance awake without re-rendering the full UI.
+app.get('/health', (req, res) => {
+  res.json({ ok: true, running: BOT.running, balance: BOT.balance, uptime: Date.now() - SESSION_START });
+});
+
 app.get('/api/state', (req, res) => {
   try {
     const safeBot = {

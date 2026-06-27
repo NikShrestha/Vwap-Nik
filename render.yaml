@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: vwap-scalper-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Optional Telegram notifications — set these in the Render dashboard
+      # (Environment tab) so they are not committed to git:
+      - key: TG_TOKEN
+        sync: false
+      - key: TG_CHAT_ID
+        sync: false
