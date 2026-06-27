@@ -3,6 +3,9 @@ services:
     name: vwap-scalper-bot
     runtime: node
     plan: free
+    # Binance's global Futures API (fapi.binance.com) geo-blocks US IPs (HTTP 451),
+    # so this MUST be a non-US region. Singapore and Frankfurt both work.
+    region: singapore
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
